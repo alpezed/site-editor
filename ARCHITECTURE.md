@@ -45,7 +45,10 @@ src/
     editor/
       ast.ts                # apply field edits to source
       save.ts               # the Save workflow
-    sandbox/index.ts        # E2B/Docker/mock live-preview driver
+    sandbox/
+      index.ts            # driver selector (E2B/Docker/mock)
+      e2b.ts              # E2B driver: clone, install, dev server, hot reload
+      service.ts          # editor session ↔ sandbox lifecycle + edit sync
     deploy/{vercel,service}.ts
     queue/index.ts          # BullMQ with inline fallback
     integrations/           # email, analytics, billing
@@ -62,6 +65,7 @@ src/
       github/repositories   # list repos
       github/webhook        # push/installation
       sites/[siteId]/{repository,import,save,deploy,editor}
+      sites/[siteId]/preview{,/sync}  # start/stop/logs + hot-reload sync
       vercel/webhook        # deployment status mirror
   workers/index.ts          # BullMQ worker process
 ```

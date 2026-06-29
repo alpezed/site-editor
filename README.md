@@ -24,7 +24,7 @@ app runs locally before you supply credentials.
 | Visual editor (3-column + bottom git/deploy bar) | ✅ real |
 | Save workflow: apply field edits → commit → push → record deployment | ✅ real (Octokit git data API) |
 | GitHub & Vercel webhooks | ✅ real (signature-verified) |
-| Live preview sandbox (E2B / Docker / mock) | ⚙️ interface + mock driver; E2B driver stubbed |
+| Live preview sandbox — E2B (clone → install → dev server → hot reload) | ✅ real (set `E2B_API_KEY`); Docker driver still mock |
 | Vercel deploy trigger / status | ✅ real REST, simulated without a token |
 | BullMQ/Redis queue + worker | ✅ real, falls back to inline without Redis |
 | Stripe / Resend / PostHog / Sentry | ⚙️ guarded thin clients (no-op without keys) |

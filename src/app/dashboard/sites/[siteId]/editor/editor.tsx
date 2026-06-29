@@ -45,6 +45,8 @@ export function Editor(props: Props) {
   );
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
+  const [previewUrl, setPreviewUrl] = useState<string | null>(props.previewUrl);
+  const [startingPreview, setStartingPreview] = useState(false);
 
   const activeComponent = useMemo(
     () => metadata.components.find((c) => c.filePath === activeFile) ?? null,
@@ -61,16 +63,39 @@ export function Editor(props: Props) {
   const autosave = useCallback(
     (next: EditorState["pending"]) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
-      saveTimer.current = setTimeout(() => {
-        fetch(`/api/sites/${props.siteId}/editor`, {
+      saveTimer.current = setTimeout(async () => {
+        await fetch(`/api/sites/${props.siteId}/editor`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
           body: JSON.stringify({ pending: next, activeFile }),
         }).catch(() => {});
+        // Hot-reload the running sandbox with the latest edits.
+        if (previewUrl) {
+          fetch(`/api/sites/${props.siteId}/preview/sync`, {
+            method: "POST",
+          }).catch(() => {});
+        }
       }, 800);
     },
-    [props.siteId, activeFile],
+    [props.siteId, activeFile, previewUrl],
   );
+
+  async function startPreview() {
+    setStartingPreview(true);
+    setStatus(null);
+    try {
+      const res = await fetch(`/api/sites/${props.siteId}/preview`, {
+        method: "POST",
+      });
+      const data = await res.json();
+      if (!res.ok) throw new Error(data.error ?? "Failed to start preview");
+      setPreviewUrl(data.previewUrl);
+    } catch (err) {
+      setStatus(err instanceof Error ? err.message : "Error");
+    } finally {
+      setStartingPreview(false);
+    }
+  }
 
   function setField(filePath: string, field: string, value: string) {
     setPending((prev) => {
@@ -228,20 +253,26 @@ export function Editor(props: Props) {
 
         {/* Center: live preview */}
         <main className="min-w-0 flex-1 bg-muted/30">
-          {props.previewUrl ? (
+          {previewUrl ? (
             <iframe
-              src={props.previewUrl}
+              src={previewUrl}
               className="h-full w-full border-0 bg-white"
               title="Live preview"
             />
           ) : (
             <div className="flex h-full items-center justify-center p-8 text-center text-sm text-muted-foreground">
-              <div>
+              <div className="space-y-3">
                 <p className="font-medium">Live preview not running</p>
-                <p className="mt-1">
-                  A sandbox (E2B) renders the site here with hot reload. Set{" "}
-                  <code>SANDBOX_DRIVER</code> and connect E2B to enable it.
+                <p>
+                  Spin up an isolated E2B sandbox that clones your repo, installs
+                  deps and runs the dev server with hot reload.
                 </p>
+                <Button onClick={startPreview} disabled={startingPreview || !props.imported}>
+                  {startingPreview ? "Starting sandbox…" : "Start live preview"}
+                </Button>
+                {!props.imported && (
+                  <p className="text-xs">Import the project first.</p>
+                )}
               </div>
             </div>
           )}
