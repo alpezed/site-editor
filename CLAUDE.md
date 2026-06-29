@@ -28,7 +28,7 @@ Minimum env to run and click around: `NEXT_PUBLIC_SUPABASE_URL`, `NEXT_PUBLIC_SU
 The central design decision: **auth, GitHub, and sites are deliberately decoupled.** Don't entangle them.
 
 1. **Identity = Supabase Auth.** Owns email/password, Google OAuth, magic link, sessions, password reset. App data never lives in Auth. The app `users` table references `auth_user_id` only. Every auth callback calls `syncUser()` (`src/lib/auth.ts`) to upsert the app `users` row.
-2. **GitHub = Square Auth + GitHub App.** *Not* part of login. Connected once, after login, from Account Settings → Integrations, and is optional. Square Auth (`src/lib/github/square-auth.ts`) brokers the OAuth code exchange + token refresh; tokens are cached in `github_connections`.
+2. **GitHub = OAuth2 + GitHub App.** *Not* part of login. Connected once, after login, from Account Settings → Integrations, and is optional. `src/lib/github/oauth.ts` runs GitHub's OAuth2 user-to-server flow (authorize/exchange/refresh) against the GitHub App's client credentials; tokens are cached in `github_connections`.
 3. **Sites.** Created without GitHub. A repo is attached per-site later from the site's settings (one repo per site for the MVP — schema allows lifting this).
 
 ## Key flows (where to look before editing)

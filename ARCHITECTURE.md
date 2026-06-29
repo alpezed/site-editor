@@ -34,7 +34,7 @@ src/
     auth.ts                 # Supabase user → app user projection
     supabase/               # browser + server clients, middleware session
     github/
-      square-auth.ts        # delegated GitHub OAuth (authorize/exchange/refresh)
+      oauth.ts              # GitHub OAuth2 (authorize/exchange/refresh)
       app.ts                # Octokit: list repos, read/commit files
       connection.ts         # store/get/disconnect a user's GitHub connection
       webhook.ts            # HMAC signature verification

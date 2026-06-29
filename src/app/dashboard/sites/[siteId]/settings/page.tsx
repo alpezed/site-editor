@@ -4,7 +4,10 @@ import { ArrowLeft } from "lucide-react";
 import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getConnection } from "@/lib/github/connection";
-import { connectGithub } from "@/app/dashboard/settings/integrations/actions";
+import {
+  connectGithub,
+  disconnectGithub,
+} from "@/app/dashboard/settings/integrations/actions";
 import { RepositorySettings } from "./repository-settings";
 import { Button } from "@/components/ui/button";
 
@@ -23,10 +26,9 @@ export default async function SiteSettingsPage({
   if (!site) notFound();
 
   const connection = await getConnection(user.id);
-  const connectAction = connectGithub.bind(
-    null,
-    `/dashboard/sites/${site.id}/settings`,
-  );
+  const returnTo = `/dashboard/sites/${site.id}/settings`;
+  const connectAction = connectGithub.bind(null, returnTo);
+  const disconnectAction = disconnectGithub.bind(null, returnTo);
 
   return (
     <div className="mx-auto max-w-2xl p-8">
@@ -46,6 +48,7 @@ export default async function SiteSettingsPage({
         githubConnected={Boolean(connection)}
         githubUsername={connection?.githubUsername ?? null}
         connectGithubAction={connectAction}
+        disconnectGithubAction={disconnectAction}
         repository={
           site.repository
             ? {

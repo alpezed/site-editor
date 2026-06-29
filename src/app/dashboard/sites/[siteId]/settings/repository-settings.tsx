@@ -29,6 +29,7 @@ interface Props {
   githubConnected: boolean;
   githubUsername: string | null;
   connectGithubAction: () => Promise<void>;
+  disconnectGithubAction: () => Promise<void>;
   repository: {
     repositoryName: string;
     branch: string;
@@ -42,6 +43,7 @@ export function RepositorySettings({
   githubConnected,
   githubUsername,
   connectGithubAction,
+  disconnectGithubAction,
   repository,
 }: Props) {
   const router = useRouter();
@@ -166,7 +168,14 @@ export function RepositorySettings({
   return (
     <Card>
       <CardHeader>
-        <CardTitle className="text-base">Choose repository</CardTitle>
+        <div className="flex items-center justify-between">
+          <CardTitle className="text-base">Choose repository</CardTitle>
+          <form action={disconnectGithubAction}>
+            <Button variant="ghost" size="sm" type="submit">
+              Disconnect GitHub
+            </Button>
+          </form>
+        </div>
         <CardDescription>
           Connected as @{githubUsername}. One repository per site.
         </CardDescription>

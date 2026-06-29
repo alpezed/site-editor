@@ -29,12 +29,6 @@ export const env = {
     storageBucket: optional("SUPABASE_STORAGE_BUCKET", "assets"),
   },
 
-  squareAuth: {
-    url: optional("SQUARE_AUTH_URL"),
-    clientId: optional("SQUARE_AUTH_CLIENT_ID"),
-    clientSecret: () => optional("SQUARE_AUTH_CLIENT_SECRET"),
-  },
-
   github: {
     appId: optional("GITHUB_APP_ID"),
     appSlug: optional("GITHUB_APP_SLUG"),

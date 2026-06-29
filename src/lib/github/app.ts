@@ -1,13 +1,12 @@
 import { Octokit } from "octokit";
 import { env } from "@/lib/env";
 import { prisma } from "@/lib/prisma";
-import { refreshToken } from "@/lib/github/square-auth";
+import { refreshAccessToken } from "@/lib/github/oauth";
 import type { GithubConnection } from "@prisma/client";
 
 /**
- * GitHub App access layer. We authenticate as the user's installation using
- * the access token brokered by Square Auth. Tokens are refreshed transparently
- * when expired.
+ * GitHub App access layer. We authenticate as the user using the OAuth
+ * access token. Tokens are refreshed transparently when expired.
  */
 
 /** Returns a valid Octokit client for a connection, refreshing if expired. */
@@ -20,7 +19,7 @@ export async function octokitForConnection(
     connection.expiresAt && connection.expiresAt.getTime() < Date.now() + 60_000;
 
   if (expired && connection.refreshToken) {
-    const refreshed = await refreshToken(connection.refreshToken);
+    const refreshed = await refreshAccessToken(connection.refreshToken);
     token = refreshed.accessToken;
     await prisma.githubConnection.update({
       where: { id: connection.id },
@@ -49,17 +48,34 @@ export async function listRepositories(
 ): Promise<RepoSummary[]> {
   const octokit = await octokitForConnection(connection);
 
-  // Prefer installation-scoped repos when an installation exists (GitHub App),
-  // falling back to the user's accessible repos.
-  const repos = connection.installationId
-    ? await octokit.paginate(
-        "GET /user/installations/{installation_id}/repositories",
-        { installation_id: Number(connection.installationId), per_page: 100 },
-      )
-    : await octokit.paginate("GET /user/repos", {
-        per_page: 100,
-        sort: "updated",
-      });
+  // A GitHub App user token only sees private repos through the app's
+  // installations. Enumerate every installation the user can access and
+  // aggregate their repos — don't rely on a single stored installationId,
+  // which is stale if the app was installed after the OAuth connect.
+  const installations = await octokit.paginate("GET /user/installations", {
+    per_page: 100,
+  });
+
+  let repos: unknown[];
+  if (installations.length > 0) {
+    const perInstall = await Promise.all(
+      installations.map((inst) =>
+        octokit.paginate(
+          "GET /user/installations/{installation_id}/repositories",
+          { installation_id: inst.id, per_page: 100 },
+        ),
+      ),
+    );
+    repos = perInstall.flat();
+  } else {
+    // No installation — best effort with the user's OAuth-accessible repos.
+    repos = await octokit.paginate("GET /user/repos", {
+      per_page: 100,
+      sort: "updated",
+      visibility: "all",
+      affiliation: "owner,collaborator,organization_member",
+    });
+  }
 
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   return (repos as any[]).map((r) => ({

@@ -1,7 +1,7 @@
 import { NextResponse, type NextRequest } from "next/server";
 import { cookies } from "next/headers";
 import { getCurrentUser } from "@/lib/auth";
-import { exchangeCode } from "@/lib/github/square-auth";
+import { exchangeCode } from "@/lib/github/oauth";
 import { saveConnection } from "@/lib/github/connection";
 import { logAudit } from "@/lib/audit";
 import { env } from "@/lib/env";

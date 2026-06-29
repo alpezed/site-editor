@@ -1,5 +1,5 @@
 import { prisma } from "@/lib/prisma";
-import type { SquareAuthTokens } from "@/lib/github/square-auth";
+import type { GithubTokens } from "@/lib/github/oauth";
 import type { GithubConnection } from "@prisma/client";
 
 /** The single GitHub connection for a user, if any. */
@@ -7,10 +7,10 @@ export function getConnection(userId: string): Promise<GithubConnection | null> 
   return prisma.githubConnection.findUnique({ where: { userId } });
 }
 
-/** Upsert a user's GitHub connection from Square Auth tokens. */
+/** Upsert a user's GitHub connection from GitHub OAuth tokens. */
 export function saveConnection(
   userId: string,
-  tokens: SquareAuthTokens,
+  tokens: GithubTokens,
 ): Promise<GithubConnection> {
   const data = {
     githubUserId: tokens.githubUserId,

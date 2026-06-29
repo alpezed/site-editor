@@ -5,13 +5,14 @@ import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
 import { requireUser } from "@/lib/auth";
 import { disconnect } from "@/lib/github/connection";
-import { getAuthorizeUrl } from "@/lib/github/square-auth";
+import { getInstallUrl } from "@/lib/github/app";
 import { logAudit } from "@/lib/audit";
-import { env } from "@/lib/env";
 import { GH_STATE_COOKIE } from "@/lib/github/oauth-state";
 
-/** Start the Square Auth GitHub connection flow. `returnTo` is where the
- *  callback sends the user once the connection completes. */
+/** Start the GitHub connection flow. Sends the user to the App's install
+ *  screen (which also authorizes OAuth during install, per the App config), so
+ *  the user picks which repos — including private — the App can access.
+ *  `returnTo` is where the callback sends the user once it completes. */
 export async function connectGithub(returnTo: string) {
   await requireUser();
 
@@ -25,16 +26,14 @@ export async function connectGithub(returnTo: string) {
     path: "/",
   });
 
-  const url = getAuthorizeUrl({
-    state,
-    redirectUri: `${env.appUrl}/api/github/oauth/callback`,
-  });
-  redirect(url);
+  redirect(getInstallUrl(state));
 }
 
-export async function disconnectGithub() {
+export async function disconnectGithub(
+  returnTo = "/dashboard/settings/integrations",
+) {
   const user = await requireUser();
   await disconnect(user.id);
   await logAudit(user.id, "github.disconnect");
-  redirect("/dashboard/settings/integrations");
+  redirect(returnTo);
 }

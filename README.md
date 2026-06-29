@@ -18,7 +18,7 @@ app runs locally before you supply credentials.
 | App `users` projection from auth identity | ✅ real |
 | Prisma schema — all tables (users, github_connections, sites, site_repositories, deployments, editor_sessions, assets, audit_logs) | ✅ real |
 | Dashboard, New Site wizard, site dashboard, settings | ✅ real |
-| GitHub connect via **Square Auth** OAuth (account-level, optional) | ✅ real flow, ⚙️ point `SQUARE_AUTH_URL` at the service |
+| GitHub connect via **GitHub OAuth2** (account-level, optional) | ✅ real flow, ⚙️ set `GITHUB_APP_CLIENT_ID` / `GITHUB_APP_CLIENT_SECRET` |
 | Repository connect + branch select | ✅ real (Octokit) |
 | Repository import: framework detection + component scanner | ✅ real |
 | Visual editor (3-column + bottom git/deploy bar) | ✅ real |

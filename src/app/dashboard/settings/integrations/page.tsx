@@ -50,7 +50,7 @@ export default async function IntegrationsPage() {
                 Connected as{" "}
                 <span className="font-medium">@{connection.githubUsername}</span>
               </p>
-              <form action={disconnectGithub}>
+              <form action={disconnectGithub.bind(null, "/dashboard/settings/integrations")}>
                 <Button variant="outline" size="sm">
                   Disconnect
                 </Button>
