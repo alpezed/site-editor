@@ -28,7 +28,9 @@ const TIMEOUT_MS = 15 * 60_000;
 const INSTALL_TIMEOUT_MS = 5 * 60_000;
 
 function template(): string | undefined {
-  return process.env.E2B_TEMPLATE || undefined;
+  // Alias of the prebuilt v2 template (sandbox-templates/e2b-base). When unset,
+  // Sandbox.create falls back to E2B's default base image.
+  return env.sandbox.e2bTemplate || undefined;
 }
 
 /**

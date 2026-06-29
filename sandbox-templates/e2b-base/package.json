@@ -1,0 +1,17 @@
+{
+  "name": "site-editor-e2b-base",
+  "private": true,
+  "type": "module",
+  "description": "E2B v2 template (Build System 2.0) for site-editor live-preview sandboxes.",
+  "scripts": {
+    "build:dev": "tsx build.dev.ts",
+    "build:prod": "tsx build.prod.ts"
+  },
+  "dependencies": {
+    "dotenv": "^16.4.5",
+    "e2b": "^2.31.0"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0"
+  }
+}

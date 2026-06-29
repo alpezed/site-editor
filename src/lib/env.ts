@@ -41,6 +41,8 @@ export const env = {
   sandbox: {
     driver: optional("SANDBOX_DRIVER", "mock") as "e2b" | "docker" | "mock",
     e2bApiKey: () => optional("E2B_API_KEY"),
+    /** Alias of the prebuilt E2B template (see sandbox-templates/e2b-base). */
+    e2bTemplate: optional("E2B_TEMPLATE"),
   },
 
   vercel: {
