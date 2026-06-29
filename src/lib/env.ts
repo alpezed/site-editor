@@ -18,11 +18,13 @@ function optional(name: string, fallback = ""): string {
 }
 
 export const env = {
-  appUrl: optional("NEXT_PUBLIC_APP_URL", "http://localhost:3000"),
+  appUrl: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000",
 
   supabase: {
-    url: optional("NEXT_PUBLIC_SUPABASE_URL"),
-    anonKey: optional("NEXT_PUBLIC_SUPABASE_ANON_KEY"),
+    // Static references so Next.js inlines these into the client bundle.
+    // Dynamic `process.env[name]` access is NOT inlined and yields undefined in the browser.
+    url: process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+    anonKey: process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? "",
     serviceRoleKey: () => required("SUPABASE_SERVICE_ROLE_KEY"),
     storageBucket: optional("SUPABASE_STORAGE_BUCKET", "assets"),
   },
@@ -57,7 +59,7 @@ export const env = {
   stripe: {
     secretKey: () => optional("STRIPE_SECRET_KEY"),
     webhookSecret: () => optional("STRIPE_WEBHOOK_SECRET"),
-    publishableKey: optional("NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY"),
+    publishableKey: process.env.NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY ?? "",
   },
 
   resend: {
@@ -66,9 +68,9 @@ export const env = {
   },
 
   posthog: {
-    key: optional("NEXT_PUBLIC_POSTHOG_KEY"),
-    host: optional("NEXT_PUBLIC_POSTHOG_HOST", "https://us.i.posthog.com"),
+    key: process.env.NEXT_PUBLIC_POSTHOG_KEY ?? "",
+    host: process.env.NEXT_PUBLIC_POSTHOG_HOST ?? "https://us.i.posthog.com",
   },
 
-  sentryDsn: optional("NEXT_PUBLIC_SENTRY_DSN"),
+  sentryDsn: process.env.NEXT_PUBLIC_SENTRY_DSN ?? "",
 };
