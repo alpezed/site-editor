@@ -18,6 +18,10 @@ export interface SectionInstance {
   key: string;
   /** Catalog section id this instance was created from. */
   id: string;
+  /** Visible text of the element "Add below" was clicked on. The section tag is
+   *  spliced right after the JSX node rendering this text on sync/save; absent
+   *  for gallery-appended sections (which land at the page end). */
+  afterAnchor?: string;
 }
 
 /** Editor session state persisted for autosave. */

@@ -102,9 +102,11 @@ export function Editor(props: Props) {
   textEditsRef.current = textEdits;
   sectionsRef.current = sections;
   overridesRef.current = fileOverrides;
-  // When "Add below" was used on a section, the next added section is inserted
-  // right after this instance key (else appended).
+  // When "Add below" was used, the next added section is inserted right after
+  // this instance key in the staged list (else appended), and anchored in source
+  // to the clicked element's visible text so it persists where it was dropped.
   const addBelowAfterKey = useRef<string | null>(null);
+  const addBelowAnchor = useRef<string | null>(null);
 
   const body = useCallback(
     () => ({
@@ -279,6 +281,7 @@ export function Editor(props: Props) {
       }
       if (d.type === "add-below") {
         addBelowAfterKey.current = d.afterKey ?? null;
+        addBelowAnchor.current = d.anchor ?? null;
         setMode("explore");
         return;
       }
@@ -349,12 +352,16 @@ export function Editor(props: Props) {
   function addSection(id: string) {
     const key = crypto.randomUUID();
     const next = [...sectionsRef.current];
-    // Insert after the "Add below" anchor instance, else append.
+    // Insert after the "Add below" anchor instance, else append. The clicked
+    // element's text anchors the source splice so it persists in place.
     const afterKey = addBelowAfterKey.current;
+    const afterAnchor = addBelowAnchor.current;
     addBelowAfterKey.current = null;
+    addBelowAnchor.current = null;
+    const inst: SectionInstance = afterAnchor ? { key, id, afterAnchor } : { key, id };
     const at = afterKey ? next.findIndex((s) => s.key === afterKey) : -1;
-    if (at >= 0) next.splice(at + 1, 0, { key, id });
-    else next.push({ key, id });
+    if (at >= 0) next.splice(at + 1, 0, inst);
+    else next.push(inst);
     setSections(next);
     sectionsRef.current = next;
     setMode("build");

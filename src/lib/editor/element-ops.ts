@@ -49,18 +49,9 @@ function textOf(node: AnyNode, source: string): string {
   return norm(out);
 }
 
-/** Apply an op to the element matching `anchor`. Returns null if not found. */
-export function applyElementOp(
-  source: string,
-  anchor: string,
-  op: ElementOp,
-): string | null {
-  const target = norm(anchor);
-  if (!target) return null;
-
-  let ast;
+function parseSafe(source: string) {
   try {
-    ast = parse(source, {
+    return parse(source, {
       sourceType: "module",
       plugins: ["typescript", "jsx"],
       errorRecovery: true,
@@ -68,6 +59,27 @@ export function applyElementOp(
   } catch {
     return null;
   }
+}
+
+/** True if `source` still parses as JSX/TS — used to reject edits that would
+ *  emit broken code (e.g. a sibling insert that produces two JSX roots). */
+export function parsesOk(source: string): boolean {
+  return parseSafe(source) != null;
+}
+
+/**
+ * Locate the JSX element that renders `anchor` (its normalized visible text),
+ * returning the node plus its parent. Same matcher click-to-edit/element-ops
+ * use, extracted so `applySectionAdds` can insert relative to it.
+ */
+export function locateByAnchor(
+  source: string,
+  anchor: string,
+): { node: AnyNode; parent: AnyNode | null } | null {
+  const target = norm(anchor);
+  if (!target) return null;
+  const ast = parseSafe(source);
+  if (!ast) return null;
 
   // Smallest JSXElement/JSXFragment whose text contains the anchor.
   // Pass 1 (precise): smallest element whose source text contains the whole
@@ -110,7 +122,19 @@ export function applyElementOp(
   }
 
   if (!best) return null;
-  const node = best as AnyNode;
+  return { node: best, parent: bestParent };
+}
+
+/** Apply an op to the element matching `anchor`. Returns null if not found. */
+export function applyElementOp(
+  source: string,
+  anchor: string,
+  op: ElementOp,
+): string | null {
+  const hit = locateByAnchor(source, anchor);
+  if (!hit) return null;
+  const node = hit.node;
+  const bestParent = hit.parent;
 
   if (op === "delete") {
     return spliceOut(source, node);

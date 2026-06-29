@@ -244,15 +244,17 @@ export const EDITOR_AGENT_JS = String.raw`
     var isWholeSection = wrap && (selected === wrap || selected === wrap.firstElementChild);
 
     if (kind === "add-below") {
-      // Anchor only to a SECTION (so the instant placement matches where it
-      // persists). Below a non-section element, staged sections render at the
-      // page end anyway — so append there too, keeping DOM and reload in sync.
-      addBelowAnchor = wrap || null;
+      // Drop the new section right after the clicked element — both in the live
+      // DOM (addBelowAnchor) and in source (anchor = the element's visible text,
+      // which the parent locates the JSX node by on sync/save). afterKey still
+      // orders staged sections among themselves.
+      addBelowAnchor = selected;
       parent.postMessage(
         {
           source: "site-editor",
           type: "add-below",
           afterKey: wrap ? wrap.getAttribute("data-section-key") : null,
+          anchor: anchorOf(selected),
         },
         "*",
       );

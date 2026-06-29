@@ -74,20 +74,19 @@ export async function saveSite(opts: {
     edited.set(filePath, applyFieldEdits(current, fieldEdits));
   }
 
-  // Sections staged from the gallery: write each instance's component file and
-  // append its tag to the home route (composed on top of any field edits above).
-  // Done BEFORE text edits so section content also receives them.
-  if (sections.length > 0) {
-    const plan = await planSectionsForHome(
-      repo.metadata as unknown as ProjectMetadata | null,
-      sections,
-      load,
-    );
-    if (plan) {
-      for (const f of plan.files) edited.set(f.path, f.content);
-      const base = edited.get(plan.homePath) ?? plan.homeSource;
-      edited.set(plan.homePath, applySectionAdds(base, plan.additions));
-    }
+  // Sections staged from the gallery: write each instance's component file now.
+  // Home-page tags are appended LAST (after overrides) so a page override can't
+  // wipe them. Written before text edits so section content also receives them.
+  const sectionPlan =
+    sections.length > 0
+      ? await planSectionsForHome(
+          repo.metadata as unknown as ProjectMetadata | null,
+          sections,
+          load,
+        )
+      : null;
+  if (sectionPlan) {
+    for (const f of sectionPlan.files) edited.set(f.path, f.content);
   }
 
   const textEditList = Object.entries(textEdits).map(([from, to]) => ({ from, to }));
@@ -109,6 +108,13 @@ export async function saveSite(opts: {
   // Whole-file overrides from in-preview element ops win per file.
   for (const [p, content] of Object.entries(state.fileOverrides ?? {})) {
     edited.set(p, content);
+  }
+
+  // Append section tags to the home page LAST — on top of any override — so the
+  // staged sections are authoritative and never clobbered (idempotent per key).
+  if (sectionPlan) {
+    const base = edited.get(sectionPlan.homePath) ?? sectionPlan.homeSource;
+    edited.set(sectionPlan.homePath, applySectionAdds(base, sectionPlan.additions));
   }
 
   const changes: { path: string; content: string }[] = [];

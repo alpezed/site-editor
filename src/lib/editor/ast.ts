@@ -1,4 +1,5 @@
 import type { FieldEdit } from "@/lib/editor/types";
+import { locateByAnchor, lineIndent, parsesOk } from "@/lib/editor/element-ops";
 
 /**
  * Applies field edits to a component source file.
@@ -106,63 +107,81 @@ export function applyTextEdits(
 /**
  * Append pre-built sections to a route file. Each addition carries a ready
  * `importLine` (e.g. `import Hero from "../components/.../hero"`) and a `tag`
- * (e.g. `<Hero />`). Imports land after the last top-level import; tags land
- * just before the file's last closing JSX tag (the page's root element close).
+ * (e.g. `<Hero />`). Imports land after the last top-level import. A tag with an
+ * `anchor` (the visible text of the element "Add below" was clicked on) is
+ * spliced right AFTER the JSX element rendering that text — so the section lands
+ * where the user dropped it. Tags with no anchor (gallery-appended, or an anchor
+ * that can't be located here) fall back to just before the file's last closing
+ * JSX tag (the page's root element close).
  *
- * Imports are deduped (one per component — a duplicate import is a compile
- * error), but a tag is emitted per addition, so staging the same section twice
- * drops two instances onto the page. Callers always pass the full staged list
- * against clean source (preview sync re-fetches; publish clears after commit),
- * so tags reflect exactly the staged set without accumulating across runs.
+ * Idempotent per instance: each addition's `importLine` is unique (keyed by the
+ * instance key), so an addition whose import already appears is skipped whole
+ * (import AND tag). That makes it safe to apply LAST — on top of an element-op
+ * override of the same file — without duplicating, and without a stale override
+ * snapshot ever clobbering the staged sections.
  *
- * ponytail: heuristic — assumes the route file's page returns a single root
- * element and is the last JSX in the file. If a page's shape defeats this,
- * upgrade to a Babel/JSX walk keyed by the default export. Self-check below.
+ * ponytail: anchored insert re-parses once per anchored addition and validates
+ * the result, falling back to end-append if the splice would break JSX (e.g. the
+ * anchor matched the root element → two roots). Multiple sections sharing one
+ * anchor land in reverse add-order; rare enough to leave. Self-check below.
  */
 export function applySectionAdds(
   source: string,
-  additions: { importLine: string; tag: string }[],
+  additions: { importLine: string; tag: string; anchor?: string }[],
 ): string {
-  if (additions.length === 0) return source;
-
-  // Imports: one per unique importLine, skipping any already in source.
+  // Fresh = not already in source, and not duplicated within this batch.
   const seen = new Set<string>();
-  const newImports: string[] = [];
-  for (const a of additions) {
+  const fresh = additions.filter((a) => {
     const line = a.importLine.trim();
-    if (source.includes(line) || seen.has(line)) continue;
+    if (source.includes(line) || seen.has(line)) return false;
     seen.add(line);
-    newImports.push(a.importLine);
-  }
+    return true;
+  });
+  if (fresh.length === 0) return source;
 
   let out = source;
 
-  if (newImports.length > 0) {
-    // Insert imports after the last top-level `import ... ` statement.
-    const importRe = /^[ \t]*import\b.*$/gm;
-    let lastImportEnd = -1;
-    for (const m of out.matchAll(importRe)) {
-      lastImportEnd = m.index! + m[0].length;
-    }
-    const importBlock = newImports.join("\n");
-    if (lastImportEnd >= 0) {
-      out = out.slice(0, lastImportEnd) + "\n" + importBlock + out.slice(lastImportEnd);
-    } else {
-      out = importBlock + "\n" + out;
-    }
+  // Insert imports after the last top-level `import ... ` statement.
+  const importRe = /^[ \t]*import\b.*$/gm;
+  let lastImportEnd = -1;
+  for (const m of out.matchAll(importRe)) {
+    lastImportEnd = m.index! + m[0].length;
+  }
+  const importBlock = fresh.map((a) => a.importLine).join("\n");
+  if (lastImportEnd >= 0) {
+    out = out.slice(0, lastImportEnd) + "\n" + importBlock + out.slice(lastImportEnd);
+  } else {
+    out = importBlock + "\n" + out;
   }
 
-  // Insert a tag per addition before the last closing JSX tag (`</X>` or `</>`).
-  const closeRe = /<\/[A-Za-z][\w.]*\s*>|<\/>/g;
-  let lastClose = -1;
-  for (const m of out.matchAll(closeRe)) {
-    lastClose = m.index!;
-  }
-  const tagBlock = additions.map((a) => "      " + a.tag).join("\n");
-  if (lastClose >= 0) {
-    out = out.slice(0, lastClose) + tagBlock + "\n      " + out.slice(lastClose);
+  for (const a of fresh) {
+    out = insertTag(out, a.tag, a.anchor);
   }
   return out;
+}
+
+/** Splice one section tag into `source`: after the anchor element if it locates
+ *  and the result still parses, else before the file's last closing JSX tag. */
+function insertTag(source: string, tag: string, anchor?: string): string {
+  if (anchor) {
+    const hit = locateByAnchor(source, anchor);
+    if (hit) {
+      const indent = lineIndent(source, hit.node.start);
+      const end = hit.node.end;
+      const candidate =
+        source.slice(0, end) + "\n" + indent + tag + source.slice(end);
+      if (parsesOk(candidate)) return candidate;
+      // else: splice would break JSX (anchor hit the root) — fall through.
+    }
+  }
+  // Insert before the last closing JSX tag (`</X>` or `</>`).
+  const closeRe = /<\/[A-Za-z][\w.]*\s*>|<\/>/g;
+  let lastClose = -1;
+  for (const m of source.matchAll(closeRe)) {
+    lastClose = m.index!;
+  }
+  if (lastClose < 0) return source;
+  return source.slice(0, lastClose) + "      " + tag + "\n      " + source.slice(lastClose);
 }
 
 function escapeJsxText(value: string): string {
@@ -207,10 +226,48 @@ export function __sectionDemo(): void {
       once.indexOf(`<Hero />`) < once.indexOf(`</main>`),
     "tag not inside root element",
   );
-  // Same section twice: one import (dup import = compile error), two tags.
+  // Idempotent per import: re-applying (or a dup import in the batch) is a no-op.
+  console.assert(applySectionAdds(once, add) === once, "not idempotent on re-apply");
   const dup = applySectionAdds(page, [...add, ...add]);
   console.assert(dup.split(`import Hero from`).length === 2, "import must not duplicate");
-  console.assert(dup.split(`<Hero />`).length === 3, "expected two Hero tags");
+  console.assert(dup.split(`<Hero />`).length === 2, "tag must not duplicate per import");
+
+  // Distinct instances (unique imports) → both land, even applied on top of one.
+  const two = applySectionAdds(once, [
+    { importLine: `import B from "../components/site-editor-sections/b";`, tag: `<B />` },
+  ]);
+  console.assert(two.includes(`import Hero`) && two.includes(`import B`), "second instance dropped");
+  console.assert(two.split(`<Hero />`).length === 2 && two.includes(`<B />`), "tags wrong applied on top");
+
+  // Anchored insert: the tag lands right after the element rendering the anchor,
+  // not at the page end.
+  const page2 = [
+    `export default function Home() {`,
+    `  return (`,
+    `    <main>`,
+    `      <p>Looking for a starting point</p>`,
+    `      <a>Deploy Now</a>`,
+    `    </main>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+  const anchored = applySectionAdds(page2, [
+    { importLine: `import C from "./c";`, tag: `<C />`, anchor: "Looking for a starting point" },
+  ]);
+  console.assert(
+    anchored.indexOf(`<C />`) > anchored.indexOf(`</p>`) &&
+      anchored.indexOf(`<C />`) < anchored.indexOf(`Deploy Now`),
+    "anchored tag not placed after the clicked element: " + anchored,
+  );
+  // Anchor that would split the root (matches <main>) → safe end-append fallback.
+  const rootAnchored = applySectionAdds(page2, [
+    { importLine: `import D from "./d";`, tag: `<D />`, anchor: "Looking for a starting point Deploy Now" },
+  ]);
+  console.assert(
+    rootAnchored.indexOf(`<D />`) < rootAnchored.indexOf(`</main>`) &&
+      rootAnchored.indexOf(`<D />`) > rootAnchored.indexOf(`Deploy Now`),
+    "root-matching anchor should fall back to end-append: " + rootAnchored,
+  );
   console.log("applySectionAdds self-check OK\n" + once);
 }
 

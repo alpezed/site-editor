@@ -38,7 +38,7 @@ export function planSectionAdditions(
   homePath: string,
 ): {
   files: { path: string; content: string }[];
-  additions: { importLine: string; tag: string }[];
+  additions: { importLine: string; tag: string; anchor?: string }[];
 } {
   // base = the segment before "app/" — "src/" for src/app/page.tsx, "" for app/page.tsx.
   const appIdx = homePath.indexOf("app/");
@@ -46,7 +46,7 @@ export function planSectionAdditions(
   const homeDir = path.posix.dirname(homePath);
 
   const files: { path: string; content: string }[] = [];
-  const additions: { importLine: string; tag: string }[] = [];
+  const additions: { importLine: string; tag: string; anchor?: string }[] = [];
 
   for (const inst of instances) {
     const s = getSection(inst.id);
@@ -60,6 +60,7 @@ export function planSectionAdditions(
     additions.push({
       importLine: `import ${importName} from "${spec}";`,
       tag: `<div data-section-key="${inst.key}"><${importName} /></div>`,
+      anchor: inst.afterAnchor,
     });
   }
   return { files, additions };

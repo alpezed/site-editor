@@ -155,17 +155,18 @@ export async function syncPreview(siteId: string, userId: string) {
     edited.set(filePath, applyFieldEdits(current, edits));
   }
 
-  if (sections.length > 0) {
-    const plan = await planSectionsForHome(
-      site.repository.metadata as unknown as ProjectMetadata | null,
-      sections,
-      load,
-    );
-    if (plan) {
-      for (const f of plan.files) edited.set(f.path, f.content);
-      const base = edited.get(plan.homePath) ?? plan.homeSource;
-      edited.set(plan.homePath, applySectionAdds(base, plan.additions));
-    }
+  // Sections: write each instance's component file now. The home-page tags are
+  // appended LAST (after overrides) so a stale page.tsx override can't wipe them.
+  const sectionPlan =
+    sections.length > 0
+      ? await planSectionsForHome(
+          site.repository.metadata as unknown as ProjectMetadata | null,
+          sections,
+          load,
+        )
+      : null;
+  if (sectionPlan) {
+    for (const f of sectionPlan.files) edited.set(f.path, f.content);
   }
 
   // Click-to-edit text edits: matched by value across the repo's code files so
@@ -189,6 +190,14 @@ export async function syncPreview(siteId: string, userId: string) {
 
   // Whole-file overrides from in-preview element ops win per file.
   for (const [p, content] of Object.entries(overrides)) edited.set(p, content);
+
+  // Append section tags to the home page LAST — on top of any override — so the
+  // staged sections are authoritative and never clobbered. Idempotent per
+  // instance, so this never duplicates if the override already carried them.
+  if (sectionPlan) {
+    const base = edited.get(sectionPlan.homePath) ?? sectionPlan.homeSource;
+    edited.set(sectionPlan.homePath, applySectionAdds(base, sectionPlan.additions));
+  }
 
   const files: { path: string; content: string }[] = [];
   for (const [path, content] of edited) {
