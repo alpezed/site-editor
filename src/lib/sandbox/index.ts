@@ -21,6 +21,9 @@ const mockDriver: SandboxDriver = {
   async writeFiles() {
     /* no-op */
   },
+  async readFile() {
+    return null;
+  },
   async logs() {
     return ["[mock] sandbox running", "[mock] ready on :3000"];
   },

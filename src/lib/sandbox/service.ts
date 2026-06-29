@@ -1,10 +1,14 @@
 import { prisma } from "@/lib/prisma";
 import { getSandboxDriver } from "@/lib/sandbox";
 import { octokitForConnection } from "@/lib/github/app";
-import { applyFieldEdits, applySectionAdds } from "@/lib/editor/ast";
-import { homeRouteFile, planSectionAdditions } from "@/lib/editor/sections";
+import { applyFieldEdits, applySectionAdds, applyTextEdits } from "@/lib/editor/ast";
+import { planSectionsForHome } from "@/lib/editor/sections";
+import { stampSource, stripSxIds, parseSxId } from "@/lib/editor/stamp";
+import { applyNodeEdit, type Patch } from "@/lib/editor/node-edit";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
-import type { EditorState } from "@/lib/editor/types";
+import { type EditorState, normalizeSections } from "@/lib/editor/types";
+
+const CODE_RE = /\.(tsx|jsx)$/;
 
 /**
  * Bridges editor sessions and the sandbox driver. Owns the lifecycle of the
@@ -65,7 +69,40 @@ export async function startPreview(siteId: string, userId: string) {
     });
   }
 
+  // Stamp the whole project so the visual editor can locate any element by its
+  // data-sx-id. Files are already cloned into the sandbox — read locally, stamp,
+  // write back. Best-effort: a failure just disables precise selection.
+  const [owner, repoName] = site.repository.repositoryName.split("/");
+  void stampProject(sandbox.id, connection, owner, repoName, branch);
+
   return sandbox;
+}
+
+/** Read each code file from the sandbox, stamp it with data-sx-id, write back. */
+async function stampProject(
+  sandboxId: string,
+  connection: Parameters<typeof octokitForConnection>[0],
+  owner: string,
+  repoName: string,
+  branch: string,
+): Promise<void> {
+  try {
+    const { getTree } = await import("@/lib/github/app");
+    const driver = getSandboxDriver();
+    const paths = (await getTree(connection, owner, repoName, branch))
+      .filter((p) => CODE_RE.test(p) && !p.includes("node_modules"))
+      .slice(0, 400);
+    const files: { path: string; content: string }[] = [];
+    for (const p of paths) {
+      const raw = await driver.readFile(sandboxId, p);
+      if (raw == null || raw.includes("data-sx-id")) continue;
+      const stamped = stampSource(p, raw);
+      if (stamped !== raw) files.push({ path: p, content: stamped });
+    }
+    if (files.length > 0) await driver.writeFiles(sandboxId, files);
+  } catch {
+    /* selection just won't be precise until next sync */
+  }
 }
 
 /**
@@ -82,12 +119,14 @@ export async function syncPreview(siteId: string, userId: string) {
 
   const state = (session.state as unknown as EditorState) ?? { pending: {} };
   const pending = state.pending ?? {};
-  const sections = state.sections ?? [];
+  const sections = normalizeSections(state.sections);
   const overrides = state.fileOverrides ?? {};
+  const textEdits = state.textEdits ?? {};
   if (
     Object.keys(pending).length === 0 &&
     sections.length === 0 &&
-    Object.keys(overrides).length === 0
+    Object.keys(overrides).length === 0 &&
+    Object.keys(textEdits).length === 0
   ) {
     return { written: 0 };
   }
@@ -95,7 +134,7 @@ export async function syncPreview(siteId: string, userId: string) {
   const connection = site.repository.githubConnection;
   const [owner, repo] = site.repository.repositoryName.split("/");
   const branch = site.repository.branch || site.repository.defaultBranch;
-  const { getFileContent } = await import("@/lib/github/app");
+  const { getFileContent, getTree } = await import("@/lib/github/app");
 
   // Cache fetched sources so the home file (possibly touched by both a field
   // edit and a section add) is fetched once and composed in order.
@@ -117,13 +156,35 @@ export async function syncPreview(siteId: string, userId: string) {
   }
 
   if (sections.length > 0) {
-    const homePath = homeRouteFile(
+    const plan = await planSectionsForHome(
       site.repository.metadata as unknown as ProjectMetadata | null,
+      sections,
+      load,
     );
-    const { files: sectionFiles, additions } = planSectionAdditions(sections, homePath);
-    for (const f of sectionFiles) edited.set(f.path, f.content);
-    const home = edited.get(homePath) ?? (await load(homePath));
-    if (home != null) edited.set(homePath, applySectionAdds(home, additions));
+    if (plan) {
+      for (const f of plan.files) edited.set(f.path, f.content);
+      const base = edited.get(plan.homePath) ?? plan.homeSource;
+      edited.set(plan.homePath, applySectionAdds(base, plan.additions));
+    }
+  }
+
+  // Click-to-edit text edits: matched by value across the repo's code files so
+  // a reload renders them from source (they otherwise live only in the iframe's
+  // contentEditable DOM and revert on reload). Applied on top of field edits.
+  const textEditList = Object.entries(textEdits).map(([from, to]) => ({ from, to }));
+  if (textEditList.length > 0) {
+    const tree = await getTree(connection, owner, repo, branch).catch(() => []);
+    const codeFiles = tree
+      .filter((p) => /\.(tsx|jsx|ts|js|mdx)$/.test(p) && !p.includes("node_modules"))
+      .slice(0, 200);
+    // Union with already-edited files so section instance files (sandbox-only,
+    // never in the repo tree) also receive the text edit and persist it.
+    const targets = new Set<string>([...edited.keys(), ...codeFiles]);
+    for (const p of targets) {
+      const current = edited.get(p) ?? (await load(p));
+      if (current == null) continue;
+      edited.set(p, applyTextEdits(current, textEditList));
+    }
   }
 
   // Whole-file overrides from in-preview element ops win per file.
@@ -135,9 +196,58 @@ export async function syncPreview(siteId: string, userId: string) {
   }
 
   if (files.length > 0) {
-    await getSandboxDriver().writeFiles(session.sandboxId, files);
+    // Sandbox copy is stamped for selection; overrides/commit stay unstamped.
+    await getSandboxDriver().writeFiles(
+      session.sandboxId,
+      files.map((f) => ({ path: f.path, content: stampSource(f.path, f.content) })),
+    );
   }
   return { written: files.length };
+}
+
+/**
+ * Apply a single inspector/structural edit to the element identified by `sxId`.
+ * The sandbox holds the live rendered+stamped truth, so we read that file, strip
+ * the stamps to recover the source the sxId loc refers to, AST-edit it, persist
+ * the (unstamped) result as a file override, and write the re-stamped version
+ * back for hot reload. Returns null if the element can't be located / edited.
+ */
+export async function applyNodeEditToSite(
+  siteId: string,
+  userId: string,
+  sxId: string,
+  patch: Patch,
+): Promise<{ file: string; content: string } | null> {
+  const site = await loadSite(siteId, userId);
+  if (!site?.repository) throw new Error("No repository connected");
+
+  const parsed = parseSxId(sxId);
+  if (!parsed) return null;
+  const { filePath, line, column } = parsed;
+
+  const session = await latestSession(siteId);
+  if (!session?.sandboxId) throw new Error("No running preview");
+
+  const driver = getSandboxDriver();
+  const raw = await driver.readFile(session.sandboxId, filePath);
+  if (raw == null) return null;
+
+  const source = stripSxIds(raw);
+  const next = applyNodeEdit(source, { line, column }, patch);
+  if (next == null) return null;
+
+  const state = (session.state as unknown as EditorState) ?? { pending: {} };
+  const overrides = { ...(state.fileOverrides ?? {}), [filePath]: next };
+  await prisma.editorSession.update({
+    where: { id: session.id },
+    data: { state: { ...state, fileOverrides: overrides } as object },
+  });
+
+  await driver.writeFiles(session.sandboxId, [
+    { path: filePath, content: stampSource(filePath, next) },
+  ]);
+
+  return { file: filePath, content: next };
 }
 
 /**

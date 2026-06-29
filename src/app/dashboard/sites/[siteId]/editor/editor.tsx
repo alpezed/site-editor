@@ -2,17 +2,24 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Pencil, X } from "lucide-react";
-import type { ProjectMetadata, ScannedComponent } from "@/lib/import/component-scanner";
-import type { EditorState } from "@/lib/editor/types";
+import { Pencil } from "lucide-react";
+import type { ProjectMetadata } from "@/lib/import/component-scanner";
+import {
+  type EditorState,
+  type SectionInstance,
+  normalizeSections,
+} from "@/lib/editor/types";
 import type { DeploymentStatus } from "@prisma/client";
 import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Textarea } from "@/components/ui/textarea";
 import { cn } from "@/lib/utils";
 import { Toolbar, type EditorMode, type Device } from "./toolbar";
 import { SectionGallery } from "./section-gallery";
+import { LeftPanel } from "./left-panel";
+import { RightInspector } from "./right-inspector";
+import { useEditorStore, type Snapshot } from "@/lib/editor/store";
+import { mergeClasses } from "@/lib/editor/tailwind";
+import type { Patch } from "@/lib/editor/node-edit";
+import { getSection } from "@/lib/sections/catalog";
 import {
   PushDialog,
   PublishDialog,
@@ -40,7 +47,7 @@ export function Editor(props: Props) {
   const [device, setDevice] = useState<Device>("desktop");
   const [editMode, setEditMode] = useState(false);
 
-  const [activeFile, setActiveFile] = useState<string | null>(
+  const [activeFile] = useState<string | null>(
     metadata.components[0]?.filePath ?? null,
   );
   const [pending, setPending] = useState<EditorState["pending"]>(
@@ -49,8 +56,8 @@ export function Editor(props: Props) {
   const [textEdits, setTextEdits] = useState<Record<string, string>>(
     props.initialState.textEdits ?? {},
   );
-  const [sections, setSections] = useState<string[]>(
-    props.initialState.sections ?? [],
+  const [sections, setSections] = useState<SectionInstance[]>(() =>
+    normalizeSections(props.initialState.sections),
   );
   const [fileOverrides, setFileOverrides] = useState<Record<string, string>>(
     props.initialState.fileOverrides ?? {},
@@ -69,10 +76,13 @@ export function Editor(props: Props) {
 
   const iframeRef = useRef<HTMLIFrameElement | null>(null);
 
-  const activeComponent = useMemo(
-    () => metadata.components.find((c) => c.filePath === activeFile) ?? null,
-    [metadata.components, activeFile],
-  );
+  // Shared editor state (selection / layers tree / undo history).
+  const selection = useEditorStore((s) => s.selection);
+  const tree = useEditorStore((s) => s.tree);
+  const setSelection = useEditorStore((s) => s.setSelection);
+  const setTree = useEditorStore((s) => s.setTree);
+  const canUndo = useEditorStore((s) => s.canUndo);
+  const canRedo = useEditorStore((s) => s.canRedo);
 
   const pendingCount = useMemo(
     () =>
@@ -86,12 +96,15 @@ export function Editor(props: Props) {
   // Latest state in refs so the debounced persist never reads stale closures.
   const pendingRef = useRef(pending);
   const textEditsRef = useRef(textEdits);
-  const sectionsRef = useRef(sections);
+  const sectionsRef = useRef<SectionInstance[]>(sections);
   const overridesRef = useRef(fileOverrides);
   pendingRef.current = pending;
   textEditsRef.current = textEdits;
   sectionsRef.current = sections;
   overridesRef.current = fileOverrides;
+  // When "Add below" was used on a section, the next added section is inserted
+  // right after this instance key (else appended).
+  const addBelowAfterKey = useRef<string | null>(null);
 
   const body = useCallback(
     () => ({
@@ -126,6 +139,114 @@ export function Editor(props: Props) {
     [props.siteId, previewUrl, body],
   );
 
+  const post = useCallback((msg: Record<string, unknown>) => {
+    iframeRef.current?.contentWindow?.postMessage(
+      { source: "site-editor", ...msg },
+      "*",
+    );
+  }, []);
+
+  // ── Undo/redo: record the pre-change snapshot whenever edit-state changes,
+  //    skipping changes we apply ourselves during time travel.
+  const snapshot = useCallback(
+    (): Snapshot => ({
+      pending: pendingRef.current,
+      textEdits: textEditsRef.current,
+      sections: sectionsRef.current,
+      fileOverrides: overridesRef.current,
+    }),
+    [],
+  );
+  const prevSnap = useRef<Snapshot>(snapshot());
+  const timeTraveling = useRef(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    if (!mounted.current) {
+      mounted.current = true;
+      prevSnap.current = snapshot();
+      return;
+    }
+    if (timeTraveling.current) {
+      timeTraveling.current = false;
+    } else {
+      useEditorStore.getState().record(prevSnap.current);
+    }
+    prevSnap.current = snapshot();
+  }, [pending, textEdits, sections, fileOverrides, snapshot]);
+
+  const applySnapshot = useCallback(
+    (s: Snapshot) => {
+      timeTraveling.current = true;
+      setPending(s.pending);
+      setTextEdits(s.textEdits);
+      setSections(s.sections);
+      setFileOverrides(s.fileOverrides);
+      pendingRef.current = s.pending;
+      textEditsRef.current = s.textEdits;
+      sectionsRef.current = s.sections;
+      overridesRef.current = s.fileOverrides;
+      persist(true);
+      setIframeNonce((n) => n + 1); // reload preview to reflect reverted source
+    },
+    [persist],
+  );
+  const undo = useCallback(() => {
+    const s = useEditorStore.getState().undo(snapshot());
+    if (s) applySnapshot(s);
+  }, [snapshot, applySnapshot]);
+  const redo = useCallback(() => {
+    const s = useEditorStore.getState().redo(snapshot());
+    if (s) applySnapshot(s);
+  }, [snapshot, applySnapshot]);
+
+  // ── Inspector / structural edit on the selected element via its data-sx-id.
+  const onPatch = useCallback(
+    async (patch: Patch) => {
+      const sel = useEditorStore.getState().selection;
+      if (!sel?.sxId) return;
+      // Instant feedback for class changes, and keep the inspector's reading of
+      // the current classes in sync before the sandbox recompiles.
+      if (patch.kind === "classes") {
+        const next = mergeClasses(sel.classes.join(" "), patch.group, patch.token);
+        post({ type: "applyClasses", sxId: sel.sxId, className: next });
+        setSelection({ ...sel, classes: next.split(/\s+/).filter(Boolean) });
+      }
+      try {
+        const res = await fetch(`/api/sites/${props.siteId}/node-edit`, {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify({ sxId: sel.sxId, patch }),
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error ?? "Edit failed");
+        setFileOverrides((prev) => {
+          const nextO = { ...prev, [data.file]: data.content };
+          overridesRef.current = nextO;
+          return nextO;
+        });
+      } catch (err) {
+        setStatus(err instanceof Error ? err.message : "Couldn't apply edit");
+      }
+    },
+    [props.siteId, post, setSelection],
+  );
+
+  // Reorder staged sections to a new key order (from the Layers drag).
+  function reorderSections(orderedKeys: string[]) {
+    const byKey = new Map(sectionsRef.current.map((s) => [s.key, s]));
+    const next = orderedKeys.map((k) => byKey.get(k)!).filter(Boolean);
+    if (next.length !== sectionsRef.current.length) return;
+    sectionsRef.current = next;
+    setSections(next);
+    persist(true);
+    setIframeNonce((n) => n + 1);
+  }
+
+  function selectInIframe(sxId: string) {
+    setEditMode(true);
+    post({ type: "selectById", sxId });
+  }
+
   // Receive click-to-edit changes from the preview iframe agent.
   useEffect(() => {
     function onMessage(e: MessageEvent) {
@@ -139,8 +260,38 @@ export function Editor(props: Props) {
         );
         return;
       }
+      if (d.type === "select") {
+        setSelection({
+          sxId: d.sxId,
+          name: d.name,
+          tag: d.tag,
+          classes: d.classes ?? [],
+          text: d.text,
+          sectionKey: d.sectionKey,
+        });
+        // Refresh the layers tree alongside selection.
+        post({ type: "getTree" });
+        return;
+      }
+      if (d.type === "tree") {
+        setTree(d.nodes ?? []);
+        return;
+      }
       if (d.type === "add-below") {
+        addBelowAfterKey.current = d.afterKey ?? null;
         setMode("explore");
+        return;
+      }
+      if (d.type === "section-remove") {
+        removeSection(d.key);
+        return;
+      }
+      if (d.type === "section-move") {
+        moveSection(d.key, d.dir);
+        return;
+      }
+      if (d.type === "section-duplicate") {
+        duplicateSection(d.key, d.newKey);
         return;
       }
       if (d.type === "section-op") {
@@ -165,7 +316,9 @@ export function Editor(props: Props) {
       { source: "site-editor", type: "setEditMode", enabled: editMode },
       "*",
     );
-  }, [editMode]);
+    if (editMode) post({ type: "getTree" });
+    else setSelection(null);
+  }, [editMode, post, setSelection]);
 
   useEffect(() => {
     return () => {
@@ -183,6 +336,9 @@ export function Editor(props: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Failed to start preview");
       setPreviewUrl(data.previewUrl);
+      // A fresh sandbox is a clean clone of the repo — reapply any staged edits
+      // so they survive a reload that had to restart an expired preview.
+      fetch(`/api/sites/${props.siteId}/preview/sync`, { method: "POST" }).catch(() => {});
     } catch (err) {
       setStatus(err instanceof Error ? err.message : "Error");
     } finally {
@@ -190,31 +346,73 @@ export function Editor(props: Props) {
     }
   }
 
-  function setField(filePath: string, field: string, value: string) {
-    setPending((prev) => {
-      const next = { ...prev, [filePath]: { ...prev[filePath], [field]: value } };
-      pendingRef.current = next;
-      persist(true);
-      return next;
-    });
-  }
-
   function addSection(id: string) {
-    setSections((prev) => {
-      const next = [...prev, id];
-      sectionsRef.current = next;
-      persist(true);
-      return next;
-    });
+    const key = crypto.randomUUID();
+    const next = [...sectionsRef.current];
+    // Insert after the "Add below" anchor instance, else append.
+    const afterKey = addBelowAfterKey.current;
+    addBelowAfterKey.current = null;
+    const at = afterKey ? next.findIndex((s) => s.key === afterKey) : -1;
+    if (at >= 0) next.splice(at + 1, 0, { key, id });
+    else next.push({ key, id });
+    setSections(next);
+    sectionsRef.current = next;
     setMode("build");
-    setStatus("Section added — appearing in your preview");
+    // Instant: draw it straight into the live preview — no API round-trip, no
+    // remount, no compile wait. The iframe stays mounted (the gallery is an
+    // overlay), so the injected node survives the mode switch. The key tags the
+    // wrapper so this exact placement can be edited/removed later.
+    iframeRef.current?.contentWindow?.postMessage(
+      { source: "site-editor", type: "insertSection", html: getSection(id)?.previewHtml ?? "", key },
+      "*",
+    );
+    setStatus(previewUrl ? "Section added" : "Section staged — start the live preview to see it");
+    // Persist + sync the real component file in the background (for reload/
+    // publish). Failures don't affect what the user already sees.
+    persist(true);
   }
 
-  // In-preview structural op (reorder/duplicate/delete). The endpoint rewrites
-  // the source, persists a file override and writes it into the sandbox; we
-  // mirror the override locally (so autosave won't clobber it) and reload.
+  // Remove a whole staged-section instance by key (the agent reports this when
+  // the user deletes a section's root). Drops it from the list and re-syncs, so
+  // the home page is rewritten without its tag and its file stops being written.
+  function removeSection(key: string) {
+    const next = sectionsRef.current.filter((s) => s.key !== key);
+    sectionsRef.current = next;
+    setSections(next);
+    setStatus("Section removed");
+    persist(true);
+  }
+
+  // Reorder a section instance (the agent already swapped the DOM wrappers).
+  function moveSection(key: string, dir: "move-up" | "move-down") {
+    const arr = [...sectionsRef.current];
+    const i = arr.findIndex((s) => s.key === key);
+    const j = dir === "move-up" ? i - 1 : i + 1;
+    if (i < 0 || j < 0 || j >= arr.length) return;
+    [arr[i], arr[j]] = [arr[j], arr[i]];
+    sectionsRef.current = arr;
+    setSections(arr);
+    persist(true);
+  }
+
+  // Duplicate a section: a fresh instance (new key, same catalog id) right after
+  // the original. The agent already cloned the DOM with the new key.
+  function duplicateSection(key: string, newKey: string) {
+    const arr = [...sectionsRef.current];
+    const i = arr.findIndex((s) => s.key === key);
+    if (i < 0) return;
+    arr.splice(i + 1, 0, { key: newKey, id: arr[i].id });
+    sectionsRef.current = arr;
+    setSections(arr);
+    setStatus("Section duplicated");
+    persist(true);
+  }
+
+  // In-preview structural op (reorder/duplicate/delete). The agent already
+  // mutated the live DOM for instant feedback; here we persist in the background
+  // — rewrite source, store the override locally (so autosave won't clobber it
+  // and Push ships it). No reload; Fast Refresh reconciles the canonical render.
   async function applyElementOp(op: string, anchor: string) {
-    setStatus("Applying…");
     try {
       const res = await fetch(`/api/sites/${props.siteId}/section-op`, {
         method: "POST",
@@ -228,10 +426,8 @@ export function Editor(props: Props) {
         overridesRef.current = next;
         return next;
       });
-      setIframeNonce((n) => n + 1);
-      setStatus(`Updated ${data.file}`);
-    } catch (err) {
-      setStatus(err instanceof Error ? err.message : "Error");
+    } catch {
+      setStatus("Couldn't save this change");
     }
   }
 
@@ -246,6 +442,11 @@ export function Editor(props: Props) {
         headers: { "content-type": "application/json" },
         body: JSON.stringify(body()),
       });
+      // Sync into the sandbox too, so a reload renders the saved edits from
+      // source (text edits otherwise live only in the iframe DOM and revert).
+      if (previewUrl) {
+        await fetch(`/api/sites/${props.siteId}/preview/sync`, { method: "POST" });
+      }
       setStatus("Saved");
     } catch {
       setStatus("Save failed");
@@ -264,6 +465,8 @@ export function Editor(props: Props) {
     textEditsRef.current = {};
     sectionsRef.current = [];
     overridesRef.current = {};
+    useEditorStore.getState().resetHistory();
+    setSelection(null);
     setIframeNonce((n) => n + 1);
     setStatus(msg);
   }
@@ -282,6 +485,10 @@ export function Editor(props: Props) {
         hasDeployed={props.hasDeployed}
         saving={saving}
         pendingCount={pendingCount}
+        canUndo={canUndo}
+        canRedo={canRedo}
+        onUndo={undo}
+        onRedo={redo}
         onPreview={() => previewUrl && window.open(previewUrl, "_blank")}
         onHistory={() => setHistoryOpen(true)}
         onPush={() => setPushOpen(true)}
@@ -303,17 +510,33 @@ export function Editor(props: Props) {
       )}
 
       <div className="relative min-h-0 flex-1">
-        {mode === "explore" ? (
-          <SectionGallery added={sections} onAdd={addSection} />
-        ) : (
+        {/* Preview stays mounted always; the gallery overlays it (below) so an
+            instantly-injected section survives the explore→build switch. */}
+        {
           <div className="flex h-full">
+            {/* Left panel: Elements + Layers */}
+            <aside className="hidden w-60 shrink-0 border-r border-zinc-800 bg-zinc-950 md:block">
+              <LeftPanel
+                sections={sections}
+                tree={tree}
+                selectedSxId={selection?.sxId ?? null}
+                onAdd={addSection}
+                onSelect={selectInIframe}
+                onReorderSections={reorderSections}
+              />
+            </aside>
+
             {/* Preview */}
             <main className="relative min-w-0 flex-1 bg-zinc-900">
               {showPreview ? (
                 <div
                   className={cn(
                     "mx-auto h-full bg-white transition-[max-width]",
-                    device === "mobile" ? "max-w-[390px]" : "max-w-none",
+                    device === "mobile"
+                      ? "max-w-[390px]"
+                      : device === "tablet"
+                        ? "max-w-[820px]"
+                        : "max-w-none",
                   )}
                 >
                   <iframe
@@ -368,92 +591,18 @@ export function Editor(props: Props) {
               )}
             </main>
 
-            {/* Inspector drawer — only while editing */}
-            {editMode && (
-              <aside className="w-80 shrink-0 overflow-y-auto border-l border-zinc-800 bg-zinc-950 p-4 text-zinc-200">
-                <div className="mb-4 flex items-center justify-between">
-                  <h2 className="text-sm font-semibold">Edit content</h2>
-                  <button
-                    onClick={() => setEditMode(false)}
-                    className="text-zinc-500 hover:text-zinc-200"
-                  >
-                    <X className="size-4" />
-                  </button>
-                </div>
+            {/* Right panel: Styles inspector */}
+            <aside className="hidden w-72 shrink-0 border-l border-zinc-800 bg-zinc-950 text-zinc-100 lg:block">
+              <RightInspector selection={selection} onPatch={onPatch} />
+            </aside>
+          </div>
+        }
 
-                {Object.keys(textEdits).length > 0 && (
-                  <div className="mb-4">
-                    <h3 className="mb-2 text-xs font-semibold uppercase text-zinc-400">
-                      Click-to-edit ({Object.keys(textEdits).length})
-                    </h3>
-                    <ul className="space-y-1.5">
-                      {Object.entries(textEdits).map(([from, to]) => (
-                        <li
-                          key={from}
-                          className="flex items-start gap-2 rounded border border-zinc-800 px-2 py-1.5 text-xs"
-                        >
-                          <span className="min-w-0 flex-1">
-                            <span className="block truncate text-zinc-500 line-through">
-                              {from}
-                            </span>
-                            <span className="block truncate">{to}</span>
-                          </span>
-                          <button
-                            className="text-zinc-500 hover:text-zinc-200"
-                            title="Drop this edit from the next push"
-                            onClick={() => {
-                              setTextEdits((prev) => {
-                                const next = { ...prev };
-                                delete next[from];
-                                textEditsRef.current = next;
-                                persist(false);
-                                return next;
-                              });
-                            }}
-                          >
-                            ✕
-                          </button>
-                        </li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-
-                {metadata.components.length > 0 && (
-                  <div className="mb-3">
-                    <Label className="text-xs uppercase text-zinc-400">
-                      Component
-                    </Label>
-                    <select
-                      value={activeFile ?? ""}
-                      onChange={(e) => setActiveFile(e.target.value)}
-                      className="mt-1 w-full rounded-md border border-zinc-700 bg-zinc-900 px-2 py-1.5 text-sm"
-                    >
-                      {metadata.components.map((c) => (
-                        <option key={c.filePath} value={c.filePath}>
-                          {c.name} ({c.editableFields.length})
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                )}
-
-                {activeComponent ? (
-                  <Inspector
-                    component={activeComponent}
-                    values={pending[activeComponent.filePath] ?? {}}
-                    onChange={(field, value) =>
-                      setField(activeComponent.filePath, field, value)
-                    }
-                  />
-                ) : (
-                  <p className="text-sm text-zinc-500">
-                    No editable components. Click text in the preview to edit it
-                    inline.
-                  </p>
-                )}
-              </aside>
-            )}
+        {/* Section gallery — overlays the live preview so adding a section can
+            inject straight into the still-mounted iframe. */}
+        {mode === "explore" && (
+          <div className="absolute inset-0 z-20 overflow-auto bg-zinc-950">
+            <SectionGallery onAdd={addSection} />
           </div>
         )}
 
@@ -489,64 +638,3 @@ export function Editor(props: Props) {
   );
 }
 
-function Inspector({
-  component,
-  values,
-  onChange,
-}: {
-  component: ScannedComponent;
-  values: Record<string, string>;
-  onChange: (field: string, value: string) => void;
-}) {
-  if (component.editableFields.length === 0) {
-    return (
-      <p className="text-sm text-zinc-500">
-        This component exposes no editable fields.
-      </p>
-    );
-  }
-  return (
-    <div className="space-y-4">
-      {component.editableFields.map((field) => {
-        const value = values[field.name] ?? "";
-        return (
-          <div key={field.name} className="space-y-1.5">
-            <Label htmlFor={field.name} className="capitalize">
-              {field.name}
-            </Label>
-            {field.type === "textarea" ? (
-              <Textarea
-                id={field.name}
-                value={value}
-                placeholder={`Edit ${field.name}…`}
-                className="border-zinc-700 bg-zinc-900"
-                onChange={(e) => onChange(field.name, e.target.value)}
-              />
-            ) : field.type === "boolean" ? (
-              <input
-                id={field.name}
-                type="checkbox"
-                checked={value === "true"}
-                onChange={(e) =>
-                  onChange(field.name, e.target.checked ? "true" : "false")
-                }
-              />
-            ) : (
-              <Input
-                id={field.name}
-                type={field.type === "number" ? "number" : "text"}
-                value={value}
-                className="border-zinc-700 bg-zinc-900"
-                placeholder={
-                  field.type === "image" ? "https://… or /public path" : ""
-                }
-                onChange={(e) => onChange(field.name, e.target.value)}
-              />
-            )}
-            <p className="text-[10px] uppercase text-zinc-500">{field.type}</p>
-          </div>
-        );
-      })}
-    </div>
-  );
-}

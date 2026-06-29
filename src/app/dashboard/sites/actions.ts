@@ -56,3 +56,20 @@ export async function createSite(
   revalidatePath("/dashboard");
   redirect(`/dashboard/sites/${site.id}`);
 }
+
+export async function deleteSite(siteId: string): Promise<void> {
+  const user = await requireUser();
+
+  // Ownership check via the same filter used everywhere else; deleteMany so a
+  // non-owner (or already-deleted) site is a silent no-op, not a throw.
+  const { count } = await prisma.site.deleteMany({
+    where: { id: siteId, ownerId: user.id },
+  });
+  if (count > 0) {
+    // Children (repository, sessions, deployments) cascade via FK onDelete.
+    await logAudit(user.id, "site.delete", siteId);
+  }
+
+  revalidatePath("/dashboard");
+  redirect("/dashboard");
+}

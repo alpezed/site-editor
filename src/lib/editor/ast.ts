@@ -109,8 +109,11 @@ export function applyTextEdits(
  * (e.g. `<Hero />`). Imports land after the last top-level import; tags land
  * just before the file's last closing JSX tag (the page's root element close).
  *
- * Idempotent: an addition whose `importLine` already appears is skipped, so
- * re-running on the full pending state (every preview sync) never duplicates.
+ * Imports are deduped (one per component — a duplicate import is a compile
+ * error), but a tag is emitted per addition, so staging the same section twice
+ * drops two instances onto the page. Callers always pass the full staged list
+ * against clean source (preview sync re-fetches; publish clears after commit),
+ * so tags reflect exactly the staged set without accumulating across runs.
  *
  * ponytail: heuristic — assumes the route file's page returns a single root
  * element and is the last JSX in the file. If a page's shape defeats this,
@@ -120,31 +123,42 @@ export function applySectionAdds(
   source: string,
   additions: { importLine: string; tag: string }[],
 ): string {
-  const fresh = additions.filter((a) => !source.includes(a.importLine.trim()));
-  if (fresh.length === 0) return source;
+  if (additions.length === 0) return source;
+
+  // Imports: one per unique importLine, skipping any already in source.
+  const seen = new Set<string>();
+  const newImports: string[] = [];
+  for (const a of additions) {
+    const line = a.importLine.trim();
+    if (source.includes(line) || seen.has(line)) continue;
+    seen.add(line);
+    newImports.push(a.importLine);
+  }
 
   let out = source;
 
-  // Insert imports after the last top-level `import ... ` statement.
-  const importRe = /^[ \t]*import\b.*$/gm;
-  let lastImportEnd = -1;
-  for (const m of out.matchAll(importRe)) {
-    lastImportEnd = m.index! + m[0].length;
-  }
-  const importBlock = fresh.map((a) => a.importLine).join("\n");
-  if (lastImportEnd >= 0) {
-    out = out.slice(0, lastImportEnd) + "\n" + importBlock + out.slice(lastImportEnd);
-  } else {
-    out = importBlock + "\n" + out;
+  if (newImports.length > 0) {
+    // Insert imports after the last top-level `import ... ` statement.
+    const importRe = /^[ \t]*import\b.*$/gm;
+    let lastImportEnd = -1;
+    for (const m of out.matchAll(importRe)) {
+      lastImportEnd = m.index! + m[0].length;
+    }
+    const importBlock = newImports.join("\n");
+    if (lastImportEnd >= 0) {
+      out = out.slice(0, lastImportEnd) + "\n" + importBlock + out.slice(lastImportEnd);
+    } else {
+      out = importBlock + "\n" + out;
+    }
   }
 
-  // Insert tags before the last closing JSX tag (`</X>` or `</>`).
+  // Insert a tag per addition before the last closing JSX tag (`</X>` or `</>`).
   const closeRe = /<\/[A-Za-z][\w.]*\s*>|<\/>/g;
   let lastClose = -1;
   for (const m of out.matchAll(closeRe)) {
     lastClose = m.index!;
   }
-  const tagBlock = fresh.map((a) => "      " + a.tag).join("\n");
+  const tagBlock = additions.map((a) => "      " + a.tag).join("\n");
   if (lastClose >= 0) {
     out = out.slice(0, lastClose) + tagBlock + "\n      " + out.slice(lastClose);
   }
@@ -193,7 +207,10 @@ export function __sectionDemo(): void {
       once.indexOf(`<Hero />`) < once.indexOf(`</main>`),
     "tag not inside root element",
   );
-  console.assert(applySectionAdds(once, add) === once, "not idempotent");
+  // Same section twice: one import (dup import = compile error), two tags.
+  const dup = applySectionAdds(page, [...add, ...add]);
+  console.assert(dup.split(`import Hero from`).length === 2, "import must not duplicate");
+  console.assert(dup.split(`<Hero />`).length === 3, "expected two Hero tags");
   console.log("applySectionAdds self-check OK\n" + once);
 }
 

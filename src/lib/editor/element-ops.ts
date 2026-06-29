@@ -15,7 +15,7 @@ import { parse } from "@babel/parser";
  */
 export type ElementOp = "move-up" | "move-down" | "duplicate" | "delete";
 
-type AnyNode = {
+export type AnyNode = {
   type: string;
   start: number;
   end: number;
@@ -70,6 +70,8 @@ export function applyElementOp(
   }
 
   // Smallest JSXElement/JSXFragment whose text contains the anchor.
+  // Pass 1 (precise): smallest element whose source text contains the whole
+  // anchor — works for fully-static elements.
   let best: AnyNode | null = null;
   let bestParent: AnyNode | null = null;
   let bestLen = Infinity;
@@ -84,6 +86,28 @@ export function applyElementOp(
       bestLen = len;
     }
   });
+
+  // Pass 2 (fallback): an element rendering dynamic content ({expr}, child
+  // components) has source text that's only PART of the rendered anchor, and the
+  // dynamic value may sit mid-text — so substring tests fail. Match by words:
+  // the element whose every static word appears in the anchor, most words wins
+  // (most specific), tiebreak on the smallest node to hit the leaf.
+  if (!best) {
+    const anchorWords = new Set(target.split(" ").filter(Boolean));
+    let bestWords = 0;
+    walk(ast.program, (n, parent) => {
+      if (n.type !== "JSXElement" && n.type !== "JSXFragment") return;
+      const words = textOf(n, source).split(" ").filter(Boolean);
+      if (words.length === 0 || !words.every((w) => anchorWords.has(w))) return;
+      const len = n.end - n.start;
+      if (words.length > bestWords || (words.length === bestWords && len < bestLen)) {
+        best = n;
+        bestParent = parent;
+        bestWords = words.length;
+        bestLen = len;
+      }
+    });
+  }
 
   if (!best) return null;
   const node = best as AnyNode;
@@ -107,7 +131,7 @@ export function applyElementOp(
 }
 
 /** Direct JSX-element children of a JSXElement/JSXFragment, in source order. */
-function jsxChildren(parent: AnyNode | null): AnyNode[] {
+export function jsxChildren(parent: AnyNode | null): AnyNode[] {
   if (!parent) return [];
   const children = (parent as Record<string, unknown>).children;
   if (!Array.isArray(children)) return [];
@@ -116,13 +140,13 @@ function jsxChildren(parent: AnyNode | null): AnyNode[] {
     .sort((a, b) => a.start - b.start);
 }
 
-function lineIndent(source: string, pos: number): string {
+export function lineIndent(source: string, pos: number): string {
   const lineStart = source.lastIndexOf("\n", pos - 1) + 1;
   const m = /^[ \t]*/.exec(source.slice(lineStart, pos));
   return m ? m[0] : "";
 }
 
-function spliceOut(source: string, node: AnyNode): string {
+export function spliceOut(source: string, node: AnyNode): string {
   // Remove the node plus its leading indentation and one trailing newline.
   const lineStart = source.lastIndexOf("\n", node.start - 1) + 1;
   const lead = source.slice(lineStart, node.start).trim() === "" ? lineStart : node.start;
@@ -132,7 +156,7 @@ function spliceOut(source: string, node: AnyNode): string {
 }
 
 /** Swap two non-overlapping source ranges (a before b). */
-function swapRanges(source: string, a: AnyNode, b: AnyNode): string {
+export function swapRanges(source: string, a: AnyNode, b: AnyNode): string {
   const first = a.start < b.start ? a : b;
   const second = a.start < b.start ? b : a;
   return (
@@ -169,6 +193,19 @@ export function __elementOpDemo(): void {
     up.indexOf("Two beta") < up.indexOf("One alpha"),
     "move-up failed",
   );
+
+  // Fallback: element with dynamic content — rendered anchor ⊋ source text.
+  const dyn = [
+    `export default function P() {`,
+    `  const name = "World";`,
+    `  return (<main><h1>Hello {name} today</h1><p>Keep me</p></main>);`,
+    `}`,
+  ].join("\n");
+  const delDyn = applyElementOp(dyn, "Hello World today", "delete")!;
+  console.assert(delDyn != null, "dynamic-anchor delete not located");
+  console.assert(!delDyn.includes("Hello "), "dynamic delete removed wrong node");
+  console.assert(delDyn.includes("Keep me"), "dynamic delete clobbered sibling");
+
   console.log("element-ops self-check OK\n--- move-up ---\n" + up);
 }
 

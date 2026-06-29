@@ -5,6 +5,8 @@ import { prisma } from "@/lib/prisma";
 import { getFileContent, getTree } from "@/lib/github/app";
 import { applyElementOp } from "@/lib/editor/element-ops";
 import { homeRouteFile } from "@/lib/editor/sections";
+import { normalizeSections, sectionInstancePath } from "@/lib/editor/types";
+import { getSandboxDriver } from "@/lib/sandbox";
 import type { EditorState } from "@/lib/editor/types";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 
@@ -51,17 +53,34 @@ export async function POST(
   });
   const state = (session?.state as unknown as EditorState | undefined) ?? { pending: {} };
   const overrides = state.fileOverrides ?? {};
+  const sections = normalizeSections(state.sections);
 
-  // Effective current content: an existing override, else the repo source.
-  const effective = async (p: string) =>
-    overrides[p] ?? (await getFileContent(connection, owner, repoName, p, branch));
+  // Effective current content, in priority order:
+  //   1. an existing override (a prior in-preview edit),
+  //   2. the LIVE sandbox file — the truth the iframe renders, including
+  //      session-added sections whose component files were never pushed,
+  //   3. the committed repo source.
+  const driver = getSandboxDriver();
+  const sandboxId = session?.sandboxId ?? null;
+  const effective = async (p: string) => {
+    if (overrides[p] != null) return overrides[p];
+    if (sandboxId) {
+      const live = await driver.readFile(sandboxId, p);
+      if (live != null) return live;
+    }
+    return await getFileContent(connection, owner, repoName, p, branch);
+  };
 
-  // Try the home route first, then scan the repo's code files for the anchor.
+  // Candidates: home route, the staged section component files (sandbox-only —
+  // not in the repo tree), then the rest of the repo's code files.
   const homePath = homeRouteFile(repo.metadata as unknown as ProjectMetadata | null);
-  const candidates = [homePath];
-  const tree = await getTree(connection, owner, repoName, branch);
+  const appIdx = homePath.indexOf("app/");
+  const base = appIdx > 0 ? homePath.slice(0, appIdx) : "";
+  const sectionFiles = sections.map((s) => base + sectionInstancePath(s.key));
+  const candidates = [homePath, ...sectionFiles];
+  const tree = await getTree(connection, owner, repoName, branch).catch(() => []);
   for (const p of tree) {
-    if (p === homePath) continue;
+    if (candidates.includes(p)) continue;
     if (/\.(tsx|jsx)$/.test(p) && !p.includes("node_modules")) candidates.push(p);
   }
 

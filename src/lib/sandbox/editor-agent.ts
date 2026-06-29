@@ -32,10 +32,34 @@ export const EDITOR_AGENT_JS = String.raw`
   var editingText = null;
   var originalText = "";
   var bar = null;
+  var addBelowAnchor = null;
 
   window.addEventListener("message", function (e) {
     var d = e.data;
-    if (!d || d.source !== "site-editor" || d.type !== "setEditMode") return;
+    if (!d || d.source !== "site-editor") return;
+    if (d.type === "insertSection") {
+      insertSection(d.html, d.key);
+      return;
+    }
+    if (d.type === "getTree") {
+      parent.postMessage({ source: "site-editor", type: "tree", nodes: buildTree() }, "*");
+      return;
+    }
+    if (d.type === "selectById") {
+      var t = document.querySelector('[data-sx-id="' + cssEscape(d.sxId) + '"]');
+      if (t) {
+        selectEl(t);
+        t.scrollIntoView({ behavior: "smooth", block: "center" });
+      }
+      return;
+    }
+    if (d.type === "applyClasses") {
+      // Instant feedback before the sandbox recompiles from source.
+      var c = document.querySelector('[data-sx-id="' + cssEscape(d.sxId) + '"]');
+      if (c) c.className = d.className;
+      return;
+    }
+    if (d.type !== "setEditMode") return;
     editMode = !!d.enabled;
     if (!editMode) {
       if (editingText) finishText(editingText);
@@ -43,6 +67,59 @@ export const EDITOR_AGENT_JS = String.raw`
       clearSelection();
     }
   });
+
+  function cssEscape(s) {
+    return String(s).replace(/["\\]/g, "\\$&");
+  }
+
+  // Walk the live DOM into a Layers tree. Capped to keep the payload small.
+  function buildTree() {
+    var MAX = 600;
+    var count = 0;
+    function node(el) {
+      if (count++ > MAX) return null;
+      var n = {
+        sxId: el.getAttribute("data-sx-id") || undefined,
+        name: nameOf(el),
+        tag: el.tagName.toLowerCase(),
+        sectionKey: el.getAttribute("data-section-key") || undefined,
+        children: [],
+      };
+      for (var i = 0; i < el.children.length; i++) {
+        var c = el.children[i];
+        if (!selectable(c)) continue;
+        var cn = node(c);
+        if (cn) n.children.push(cn);
+      }
+      return n;
+    }
+    var root = document.querySelector("main") || document.body;
+    var out = [];
+    for (var i = 0; i < root.children.length; i++) {
+      if (!selectable(root.children[i])) continue;
+      var cn = node(root.children[i]);
+      if (cn) out.push(cn);
+    }
+    return out;
+  }
+
+  // Draw a gallery section into the page immediately, before the source edit is
+  // written + recompiled. If "Add below" set an anchor, insert right after it;
+  // otherwise append to the main content. Real DOM, so it's editable too.
+  function insertSection(html, key) {
+    if (!html) return;
+    var wrap = document.createElement("div");
+    wrap.setAttribute("data-site-editor-injected", "");
+    if (key) wrap.setAttribute("data-section-key", key);
+    wrap.innerHTML = html;
+    if (addBelowAnchor && addBelowAnchor.parentNode) {
+      addBelowAnchor.after(wrap);
+    } else {
+      (document.querySelector("main") || document.body).appendChild(wrap);
+    }
+    addBelowAnchor = null;
+    wrap.scrollIntoView({ behavior: "smooth", block: "center" });
+  }
 
   function isIgnore(el) {
     return !el || (el.closest && el.closest("[data-site-editor-ignore]"));
@@ -124,6 +201,20 @@ export const EDITOR_AGENT_JS = String.raw`
     el.style.outline = "2px solid #f97316";
     el.style.outlineOffset = "-1px";
     showBar();
+    var wrap = el.closest && el.closest("[data-section-key]");
+    parent.postMessage(
+      {
+        source: "site-editor",
+        type: "select",
+        sxId: el.getAttribute("data-sx-id") || null,
+        name: nameOf(el),
+        tag: el.tagName.toLowerCase(),
+        classes: (el.getAttribute("class") || "").split(/\s+/).filter(Boolean),
+        text: isTextLeaf(el) ? el.textContent.trim() : undefined,
+        sectionKey: wrap ? wrap.getAttribute("data-section-key") : undefined,
+      },
+      "*",
+    );
   }
 
   function nameOf(el) {
@@ -149,21 +240,79 @@ export const EDITOR_AGENT_JS = String.raw`
 
   function sendOp(kind) {
     if (!selected) return;
+    var wrap = selected.closest && selected.closest("[data-section-key]");
+    var isWholeSection = wrap && (selected === wrap || selected === wrap.firstElementChild);
+
     if (kind === "add-below") {
-      parent.postMessage({ source: "site-editor", type: "add-below" }, "*");
+      // Anchor only to a SECTION (so the instant placement matches where it
+      // persists). Below a non-section element, staged sections render at the
+      // page end anyway — so append there too, keeping DOM and reload in sync.
+      addBelowAnchor = wrap || null;
+      parent.postMessage(
+        {
+          source: "site-editor",
+          type: "add-below",
+          afterKey: wrap ? wrap.getAttribute("data-section-key") : null,
+        },
+        "*",
+      );
       return;
     }
+
+    // Whole-section structural ops act on the instance (by key), not its source.
+    if (isWholeSection) {
+      var skey = wrap.getAttribute("data-section-key");
+      if (kind === "delete") {
+        wrap.remove();
+        clearSelection();
+        parent.postMessage({ source: "site-editor", type: "section-remove", key: skey }, "*");
+        return;
+      }
+      if (kind === "move-up" || kind === "move-down") {
+        var sib = kind === "move-up" ? wrap.previousElementSibling : wrap.nextElementSibling;
+        if (sib && sib.hasAttribute("data-section-key")) {
+          if (kind === "move-up") wrap.parentNode.insertBefore(wrap, sib);
+          else wrap.parentNode.insertBefore(sib, wrap);
+        }
+        clearSelection();
+        parent.postMessage({ source: "site-editor", type: "section-move", key: skey, dir: kind }, "*");
+        return;
+      }
+      if (kind === "duplicate") {
+        var newKey =
+          window.crypto && crypto.randomUUID ? crypto.randomUUID() : "dup-" + skey + "-" + Date.now();
+        var clone = wrap.cloneNode(true);
+        clone.setAttribute("data-section-key", newKey);
+        wrap.after(clone);
+        clearSelection();
+        parent.postMessage(
+          { source: "site-editor", type: "section-duplicate", key: skey, newKey: newKey },
+          "*",
+        );
+        return;
+      }
+    }
+    var anchor = anchorOf(selected);
+    var name = nameOf(selected);
+    // Mutate the live DOM immediately so the change is instant; the parent
+    // persists the equivalent source edit in the background (Fast Refresh then
+    // reconciles the canonical render).
+    var el = selected;
+    el.style.outline = "";
+    if (kind === "delete") {
+      el.remove();
+    } else if (kind === "duplicate") {
+      el.after(el.cloneNode(true));
+    } else if (kind === "move-up" && el.previousElementSibling) {
+      el.parentNode.insertBefore(el, el.previousElementSibling);
+    } else if (kind === "move-down" && el.nextElementSibling) {
+      el.parentNode.insertBefore(el.nextElementSibling, el);
+    }
+    clearSelection();
     parent.postMessage(
-      {
-        source: "site-editor",
-        type: "section-op",
-        op: kind,
-        anchor: anchorOf(selected),
-        name: nameOf(selected),
-      },
+      { source: "site-editor", type: "section-op", op: kind, anchor: anchor, name: name },
       "*"
     );
-    clearSelection();
   }
 
   function mkBtn(label, handler, opts) {

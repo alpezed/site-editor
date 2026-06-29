@@ -1,12 +1,13 @@
 import { prisma } from "@/lib/prisma";
 import { commitFiles, getFileContent, getTree } from "@/lib/github/app";
 import { applyFieldEdits, applySectionAdds, applyTextEdits } from "@/lib/editor/ast";
-import { homeRouteFile, planSectionAdditions } from "@/lib/editor/sections";
+import { planSectionsForHome } from "@/lib/editor/sections";
+import { stripSxIds } from "@/lib/editor/stamp";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import { recordDeployment } from "@/lib/deploy/service";
 import { logAudit } from "@/lib/audit";
 import { DeploymentTrigger } from "@prisma/client";
-import type { EditorState } from "@/lib/editor/types";
+import { type EditorState, normalizeSections } from "@/lib/editor/types";
 
 export interface SaveResult {
   commitHash: string;
@@ -45,7 +46,7 @@ export async function saveSite(opts: {
     (session?.state as unknown as EditorState | undefined) ?? { pending: {} };
   const pending = state.pending ?? {};
   const textEdits = state.textEdits ?? {};
-  const sections = state.sections ?? [];
+  const sections = normalizeSections(state.sections);
 
   const [owner, repoName] = repo.repositoryName.split("/");
   const branch = repo.branch || repo.defaultBranch;
@@ -73,6 +74,22 @@ export async function saveSite(opts: {
     edited.set(filePath, applyFieldEdits(current, fieldEdits));
   }
 
+  // Sections staged from the gallery: write each instance's component file and
+  // append its tag to the home route (composed on top of any field edits above).
+  // Done BEFORE text edits so section content also receives them.
+  if (sections.length > 0) {
+    const plan = await planSectionsForHome(
+      repo.metadata as unknown as ProjectMetadata | null,
+      sections,
+      load,
+    );
+    if (plan) {
+      for (const f of plan.files) edited.set(f.path, f.content);
+      const base = edited.get(plan.homePath) ?? plan.homeSource;
+      edited.set(plan.homePath, applySectionAdds(base, plan.additions));
+    }
+  }
+
   const textEditList = Object.entries(textEdits).map(([from, to]) => ({ from, to }));
   if (textEditList.length > 0) {
     // ponytail: scan up to 200 code files; large repos truncate silently.
@@ -80,21 +97,13 @@ export async function saveSite(opts: {
     const codeFiles = tree
       .filter((p) => /\.(tsx|jsx|ts|js|mdx)$/.test(p) && !p.includes("node_modules"))
       .slice(0, 200);
-    for (const p of codeFiles) {
+    // Union with already-edited files so section instance files get the edit too.
+    const targets = new Set<string>([...edited.keys(), ...codeFiles]);
+    for (const p of targets) {
       const current = await load(p);
       if (current == null) continue;
       edited.set(p, applyTextEdits(current, textEditList));
     }
-  }
-
-  // Sections staged from the gallery: write each component file and append its
-  // tag to the home route source (composed on top of any field edits above).
-  if (sections.length > 0) {
-    const homePath = homeRouteFile(repo.metadata as unknown as ProjectMetadata | null);
-    const { files: sectionFiles, additions } = planSectionAdditions(sections, homePath);
-    for (const f of sectionFiles) edited.set(f.path, f.content);
-    const home = await load(homePath);
-    if (home != null) edited.set(homePath, applySectionAdds(home, additions));
   }
 
   // Whole-file overrides from in-preview element ops win per file.
@@ -104,7 +113,9 @@ export async function saveSite(opts: {
 
   const changes: { path: string; content: string }[] = [];
   for (const [path, content] of edited) {
-    if (content !== orig.get(path)) changes.push({ path, content });
+    // Defensive: never let a sandbox-only data-sx-id stamp reach the commit.
+    const clean = stripSxIds(content);
+    if (clean !== orig.get(path)) changes.push({ path, content: clean });
   }
 
   if (changes.length === 0) {

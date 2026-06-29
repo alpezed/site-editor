@@ -31,6 +31,32 @@ function template(): string | undefined {
   return process.env.E2B_TEMPLATE || undefined;
 }
 
+/**
+ * Add the click-to-edit agent <script> to the app's layout if it isn't already
+ * there. Idempotent. Run at setup AND after every writeFiles, because syncing a
+ * file (a field/section edit) overwrites the layout from the agent-less repo
+ * source — stripping the tag and silently killing edit mode until re-injected.
+ */
+/** Write/refresh the served agent JS. Cheap — a single file write. */
+async function writeAgentFile(sbx: Sandbox): Promise<void> {
+  await sbx.files.write(`${APP_DIR}/public/__editor-agent.js`, EDITOR_AGENT_JS);
+}
+
+async function injectAgent(sbx: Sandbox): Promise<void> {
+  await writeAgentFile(sbx);
+  await sbx.commands
+    .run(
+      `cd ${APP_DIR} && node -e '
+        const fs=require("fs");
+        const tag="<script src=\\"/__editor-agent.js\\" data-site-editor-ignore></script>";
+        const files=["app/layout.tsx","app/layout.jsx","src/app/layout.tsx","src/app/layout.jsx","pages/_document.tsx","pages/_document.jsx"];
+        for(const f of files){ if(fs.existsSync(f)){ let s=fs.readFileSync(f,"utf8"); if(!s.includes("__editor-agent")){ s=s.replace(/(<body[^>]*>)/, "$1"+tag); fs.writeFileSync(f,s);} break; } }
+      '`,
+      { timeoutMs: 30_000 },
+    )
+    .catch(() => {});
+}
+
 async function open(sandboxId: string): Promise<Sandbox> {
   return Sandbox.connect(sandboxId, { apiKey: env.sandbox.e2bApiKey() });
 }
@@ -96,16 +122,7 @@ export const e2bDriver: SandboxDriver = {
 
     // 2b) Inject the click-to-edit agent: serve it from public/ and add a
     // <script> to the app's layout. Sandbox-only — never committed.
-    await sbx.files.write(`${APP_DIR}/public/__editor-agent.js`, EDITOR_AGENT_JS);
-    await sbx.commands.run(
-      `cd ${APP_DIR} && node -e '
-        const fs=require("fs");
-        const tag="<script src=\\"/__editor-agent.js\\" data-site-editor-ignore></script>";
-        const files=["app/layout.tsx","app/layout.jsx","src/app/layout.tsx","src/app/layout.jsx","pages/_document.tsx","pages/_document.jsx"];
-        for(const f of files){ if(fs.existsSync(f)){ let s=fs.readFileSync(f,"utf8"); if(!s.includes("__editor-agent")){ s=s.replace(/(<body[^>]*>)/, "$1"+tag); fs.writeFileSync(f,s);} break; } }
-      '`,
-      { timeoutMs: 30_000 },
-    ).catch(() => {});
+    await injectAgent(sbx);
 
     // 3) Start the dev server in the background, logging to a file.
     // Polling watchers (WATCHPACK_POLLING/CHOKIDAR_USEPOLLING) are required:
@@ -131,16 +148,37 @@ export const e2bDriver: SandboxDriver = {
 
   async writeFiles(sandboxId, files) {
     const sbx = await open(sandboxId);
-    await sbx.files.write(
-      files.map((f) => ({
-        path: f.path.startsWith("/") ? f.path : `${APP_DIR}/${f.path}`,
-        data: f.content,
-      })),
+    // Dedup by path: E2B rejects a batch that lists the same path twice, which
+    // would abort the entire write. Last write wins.
+    const byPath = new Map(
+      files.map((f) => [
+        f.path.startsWith("/") ? f.path : `${APP_DIR}/${f.path}`,
+        f.content,
+      ]),
     );
+    await sbx.files.write([...byPath].map(([path, data]) => ({ path, data })));
+    // Always refresh the served agent JS so a reload picks up new agent code.
+    // Re-run the <script> tag injection only when a layout/_document was written
+    // (the one case that strips it) — that's the cost-bearing node call.
+    if (files.some((f) => /(^|\/)(layout|_document)\.(tsx|jsx)$/.test(f.path))) {
+      await injectAgent(sbx);
+    } else {
+      await writeAgentFile(sbx);
+    }
     // Touch the timeout so an actively-edited sandbox stays alive.
     await Sandbox.setTimeout(sandboxId, TIMEOUT_MS, {
       apiKey: env.sandbox.e2bApiKey(),
     });
+  },
+
+  async readFile(sandboxId, path) {
+    const sbx = await open(sandboxId);
+    try {
+      const p = path.startsWith("/") ? path : `${APP_DIR}/${path}`;
+      return String(await sbx.files.read(p));
+    } catch {
+      return null;
+    }
   },
 
   async logs(sandboxId) {

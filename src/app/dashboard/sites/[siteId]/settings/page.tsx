@@ -9,6 +9,7 @@ import {
   disconnectGithub,
 } from "@/app/dashboard/settings/integrations/actions";
 import { RepositorySettings } from "./repository-settings";
+import { DeleteSite } from "./delete-site";
 import { Button } from "@/components/ui/button";
 
 export default async function SiteSettingsPage({
@@ -60,6 +61,8 @@ export default async function SiteSettingsPage({
             : null
         }
       />
+
+      <DeleteSite siteId={site.id} siteName={site.name} />
     </div>
   );
 }

@@ -15,6 +15,8 @@ export interface SandboxDriver {
     sandboxId: string,
     files: { path: string; content: string }[],
   ): Promise<void>;
+  /** Read a file from a running sandbox (the live working tree). Null if absent. */
+  readFile(sandboxId: string, path: string): Promise<string | null>;
   /** Recent console output from the dev server. */
   logs(sandboxId: string): Promise<string[]>;
   /** Whether the sandbox still exists (they expire on inactivity timeout). */

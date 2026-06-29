@@ -6,6 +6,7 @@ import {
   Compass,
   Layers,
   Monitor,
+  Tablet,
   Smartphone,
   Eye,
   Settings,
@@ -14,11 +15,13 @@ import {
   Save,
   Rocket,
   Loader2,
+  Undo2,
+  Redo2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 
 export type EditorMode = "explore" | "build";
-export type Device = "desktop" | "mobile";
+export type Device = "desktop" | "tablet" | "mobile";
 
 export function Toolbar({
   siteId,
@@ -30,6 +33,10 @@ export function Toolbar({
   hasDeployed,
   saving,
   pendingCount,
+  canUndo,
+  canRedo,
+  onUndo,
+  onRedo,
   onPreview,
   onHistory,
   onPush,
@@ -45,6 +52,10 @@ export function Toolbar({
   hasDeployed: boolean;
   saving: boolean;
   pendingCount: number;
+  canUndo: boolean;
+  canRedo: boolean;
+  onUndo: () => void;
+  onRedo: () => void;
   onPreview: () => void;
   onHistory: () => void;
   onPush: () => void;
@@ -77,9 +88,32 @@ export function Toolbar({
           <IconToggle active={device === "desktop"} onClick={() => onDevice("desktop")}>
             <Monitor className="size-4" />
           </IconToggle>
+          <IconToggle active={device === "tablet"} onClick={() => onDevice("tablet")}>
+            <Tablet className="size-4" />
+          </IconToggle>
           <IconToggle active={device === "mobile"} onClick={() => onDevice("mobile")}>
             <Smartphone className="size-4" />
           </IconToggle>
+        </div>
+
+        {/* Undo / redo */}
+        <div className="flex items-center rounded-full bg-zinc-900 p-0.5">
+          <button
+            onClick={onUndo}
+            disabled={!canUndo}
+            title="Undo"
+            className="rounded-full p-1.5 text-zinc-400 enabled:hover:text-zinc-100 disabled:opacity-30"
+          >
+            <Undo2 className="size-4" />
+          </button>
+          <button
+            onClick={onRedo}
+            disabled={!canRedo}
+            title="Redo"
+            className="rounded-full p-1.5 text-zinc-400 enabled:hover:text-zinc-100 disabled:opacity-30"
+          >
+            <Redo2 className="size-4" />
+          </button>
         </div>
 
         <PillButton onClick={onPreview}>
