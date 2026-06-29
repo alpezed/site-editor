@@ -1,0 +1,179 @@
+// SaaS Architecture v2 — GitHub-powered Next.js visual site builder.
+// Source of truth for application data. Supabase Auth owns identity;
+// this schema owns everything application-specific and references
+// auth_user_id only.
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ── Identity ────────────────────────────────────────────────────────────────
+
+/// Application profile. Mirrors the Supabase Auth user but never stores auth
+/// data. Always reference authUserId, never the auth table directly.
+model User {
+  id         String   @id @default(uuid()) @db.Uuid
+  authUserId String   @unique @map("auth_user_id") @db.Uuid
+  email      String   @unique
+  fullName   String?  @map("full_name")
+  avatarUrl  String?  @map("avatar_url")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  githubConnection GithubConnection?
+  sites            Site[]
+  auditLogs        AuditLog[]
+
+  @@map("users")
+}
+
+/// The connected GitHub account for a user. One connection per user.
+/// Tokens are issued and refreshed by Square Auth; we cache them here.
+model GithubConnection {
+  id             String    @id @default(uuid()) @db.Uuid
+  userId         String    @unique @map("user_id") @db.Uuid
+  githubUserId   String    @map("github_user_id")
+  githubUsername String    @map("github_username")
+  installationId String?   @map("installation_id")
+  accessToken    String    @map("access_token")
+  refreshToken   String?   @map("refresh_token")
+  expiresAt      DateTime? @map("expires_at")
+  connectedAt    DateTime  @default(now()) @map("connected_at")
+
+  user             User             @relation(fields: [userId], references: [id], onDelete: Cascade)
+  siteRepositories SiteRepository[]
+
+  @@map("github_connections")
+}
+
+// ── Sites ─────────────────────────────────────────────────────────────────────
+
+model Site {
+  id          String   @id @default(uuid()) @db.Uuid
+  ownerId     String   @map("owner_id") @db.Uuid
+  name        String
+  slug        String
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  owner          User            @relation(fields: [ownerId], references: [id], onDelete: Cascade)
+  repository     SiteRepository?
+  deployments    Deployment[]
+  editorSessions EditorSession[]
+  assets         Asset[]
+
+  @@unique([ownerId, slug])
+  @@map("sites")
+}
+
+/// Maps a site to a single GitHub repository (one per site for the MVP).
+model SiteRepository {
+  id                 String   @id @default(uuid()) @db.Uuid
+  siteId             String   @unique @map("site_id") @db.Uuid
+  githubConnectionId String   @map("github_connection_id") @db.Uuid
+  repositoryId       String   @map("repository_id")
+  repositoryName     String   @map("repository_name")
+  branch             String   @default("main")
+  defaultBranch      String   @default("main") @map("default_branch")
+  framework          String? // e.g. "nextjs"
+  /// Cached scan metadata (components, routes, assets) produced on import.
+  metadata           Json?
+  importedAt         DateTime? @map("imported_at")
+  connectedAt        DateTime @default(now()) @map("connected_at")
+
+  site             Site             @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  githubConnection GithubConnection @relation(fields: [githubConnectionId], references: [id])
+
+  @@map("site_repositories")
+}
+
+// ── Deployments ───────────────────────────────────────────────────────────────
+
+enum DeploymentStatus {
+  QUEUED
+  BUILDING
+  READY
+  ERROR
+  CANCELED
+}
+
+enum DeploymentTrigger {
+  AUTOMATIC
+  MANUAL
+  REDEPLOY
+}
+
+model Deployment {
+  id             String            @id @default(uuid()) @db.Uuid
+  siteId         String            @map("site_id") @db.Uuid
+  vercelProjectId String?          @map("vercel_project_id")
+  deploymentId   String?           @map("deployment_id")
+  status         DeploymentStatus  @default(QUEUED)
+  trigger        DeploymentTrigger @default(AUTOMATIC)
+  logs           Json?
+  commitHash     String?           @map("commit_hash")
+  url            String?
+  createdAt      DateTime          @default(now()) @map("created_at")
+  updatedAt      DateTime          @updatedAt @map("updated_at")
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("deployments")
+}
+
+// ── Editor ──────────────────────────────────────────────────────────────────
+
+/// Autosave + live editor state for a site. Holds pending content edits keyed
+/// by file path before they are written, committed and pushed.
+model EditorSession {
+  id        String   @id @default(uuid()) @db.Uuid
+  siteId    String   @map("site_id") @db.Uuid
+  /// Map of filePath -> field edits, plus cursor/route/preview state.
+  state     Json
+  sandboxId String?  @map("sandbox_id")
+  previewUrl String? @map("preview_url")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("editor_sessions")
+}
+
+model Asset {
+  id        String   @id @default(uuid()) @db.Uuid
+  siteId    String   @map("site_id") @db.Uuid
+  name      String
+  path      String // storage path / key
+  url       String
+  mimeType  String?  @map("mime_type")
+  size      Int?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("assets")
+}
+
+// ── Audit ─────────────────────────────────────────────────────────────────────
+
+model AuditLog {
+  id        String   @id @default(uuid()) @db.Uuid
+  userId    String?  @map("user_id") @db.Uuid
+  action    String
+  target    String?
+  metadata  Json?
+  createdAt DateTime @default(now()) @map("created_at")
+
+  user User? @relation(fields: [userId], references: [id], onDelete: SetNull)
+
+  @@index([userId])
+  @@map("audit_logs")
+}
