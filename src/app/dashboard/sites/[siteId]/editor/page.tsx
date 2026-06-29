@@ -18,7 +18,7 @@ export default async function EditorPage({
     where: { id: siteId, ownerId: user.id },
     include: {
       repository: true,
-      deployments: { orderBy: { createdAt: "desc" }, take: 1 },
+      deployments: { orderBy: { createdAt: "desc" }, take: 10 },
       editorSessions: { orderBy: { updatedAt: "desc" }, take: 1 },
     },
   });
@@ -47,6 +47,15 @@ export default async function EditorPage({
       metadata={metadata}
       initialState={initialState}
       latestDeploymentStatus={site.deployments[0]?.status ?? null}
+      hasDeployed={site.deployments.length > 0}
+      deployments={site.deployments.map((d) => ({
+        id: d.id,
+        status: d.status,
+        trigger: d.trigger,
+        commitHash: d.commitHash,
+        url: d.url,
+        createdAt: d.createdAt,
+      }))}
     />
   );
 }

@@ -1,7 +1,9 @@
 import { prisma } from "@/lib/prisma";
 import { getSandboxDriver } from "@/lib/sandbox";
 import { octokitForConnection } from "@/lib/github/app";
-import { applyFieldEdits } from "@/lib/editor/ast";
+import { applyFieldEdits, applySectionAdds } from "@/lib/editor/ast";
+import { homeRouteFile, planSectionAdditions } from "@/lib/editor/sections";
+import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import type { EditorState } from "@/lib/editor/types";
 
 /**
@@ -80,23 +82,56 @@ export async function syncPreview(siteId: string, userId: string) {
 
   const state = (session.state as unknown as EditorState) ?? { pending: {} };
   const pending = state.pending ?? {};
-  if (Object.keys(pending).length === 0) return { written: 0 };
+  const sections = state.sections ?? [];
+  const overrides = state.fileOverrides ?? {};
+  if (
+    Object.keys(pending).length === 0 &&
+    sections.length === 0 &&
+    Object.keys(overrides).length === 0
+  ) {
+    return { written: 0 };
+  }
 
   const connection = site.repository.githubConnection;
   const [owner, repo] = site.repository.repositoryName.split("/");
   const branch = site.repository.branch || site.repository.defaultBranch;
   const { getFileContent } = await import("@/lib/github/app");
 
-  const files: { path: string; content: string }[] = [];
+  // Cache fetched sources so the home file (possibly touched by both a field
+  // edit and a section add) is fetched once and composed in order.
+  const fetched = new Map<string, string>();
+  const load = async (p: string) => {
+    if (!fetched.has(p)) {
+      const c = await getFileContent(connection, owner, repo, p, branch);
+      if (c != null) fetched.set(p, c);
+    }
+    return fetched.get(p);
+  };
+
+  const edited = new Map<string, string>();
   for (const [filePath, fields] of Object.entries(pending)) {
-    const current = await getFileContent(connection, owner, repo, filePath, branch);
+    const current = await load(filePath);
     if (current == null) continue;
-    const edits = Object.entries(fields).map(([field, value]) => ({
-      field,
-      value,
-    }));
-    const next = applyFieldEdits(current, edits);
-    if (next !== current) files.push({ path: filePath, content: next });
+    const edits = Object.entries(fields).map(([field, value]) => ({ field, value }));
+    edited.set(filePath, applyFieldEdits(current, edits));
+  }
+
+  if (sections.length > 0) {
+    const homePath = homeRouteFile(
+      site.repository.metadata as unknown as ProjectMetadata | null,
+    );
+    const { files: sectionFiles, additions } = planSectionAdditions(sections, homePath);
+    for (const f of sectionFiles) edited.set(f.path, f.content);
+    const home = edited.get(homePath) ?? (await load(homePath));
+    if (home != null) edited.set(homePath, applySectionAdds(home, additions));
+  }
+
+  // Whole-file overrides from in-preview element ops win per file.
+  for (const [p, content] of Object.entries(overrides)) edited.set(p, content);
+
+  const files: { path: string; content: string }[] = [];
+  for (const [path, content] of edited) {
+    if (content !== fetched.get(path)) files.push({ path, content });
   }
 
   if (files.length > 0) {

@@ -1,6 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { commitFiles, getFileContent, getTree } from "@/lib/github/app";
-import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
+import { applyFieldEdits, applySectionAdds, applyTextEdits } from "@/lib/editor/ast";
+import { homeRouteFile, planSectionAdditions } from "@/lib/editor/sections";
+import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import { recordDeployment } from "@/lib/deploy/service";
 import { logAudit } from "@/lib/audit";
 import { DeploymentTrigger } from "@prisma/client";
@@ -43,6 +45,7 @@ export async function saveSite(opts: {
     (session?.state as unknown as EditorState | undefined) ?? { pending: {} };
   const pending = state.pending ?? {};
   const textEdits = state.textEdits ?? {};
+  const sections = state.sections ?? [];
 
   const [owner, repoName] = repo.repositoryName.split("/");
   const branch = repo.branch || repo.defaultBranch;
@@ -82,6 +85,21 @@ export async function saveSite(opts: {
       if (current == null) continue;
       edited.set(p, applyTextEdits(current, textEditList));
     }
+  }
+
+  // Sections staged from the gallery: write each component file and append its
+  // tag to the home route source (composed on top of any field edits above).
+  if (sections.length > 0) {
+    const homePath = homeRouteFile(repo.metadata as unknown as ProjectMetadata | null);
+    const { files: sectionFiles, additions } = planSectionAdditions(sections, homePath);
+    for (const f of sectionFiles) edited.set(f.path, f.content);
+    const home = await load(homePath);
+    if (home != null) edited.set(homePath, applySectionAdds(home, additions));
+  }
+
+  // Whole-file overrides from in-preview element ops win per file.
+  for (const [p, content] of Object.entries(state.fileOverrides ?? {})) {
+    edited.set(p, content);
   }
 
   const changes: { path: string; content: string }[] = [];
@@ -125,7 +143,9 @@ export async function saveSite(opts: {
   if (session) {
     await prisma.editorSession.update({
       where: { id: session.id },
-      data: { state: { ...state, pending: {}, textEdits: {} } as object },
+      data: {
+        state: { ...state, pending: {}, textEdits: {}, sections: [], fileOverrides: {} } as object,
+      },
     });
   }
 

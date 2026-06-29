@@ -1,0 +1,210 @@
+/**
+ * Static catalog of pre-built sections shown in the editor's Explore →
+ * Section Gallery. "Add to Site" stages a section in the editor's pending state;
+ * on sync/save its `code` is written as a component file and a `<ImportName/>`
+ * tag is appended to the site's home route (see applySectionAdds in ast.ts).
+ *
+ * ponytail: each section's `code` is a self-contained default-export component
+ * using inline styles only — no Tailwind/shadcn/icon deps — so it renders in any
+ * Next.js repo regardless of its CSS setup. Richer themed sections can come later
+ * once we read the host's design tokens.
+ *
+ * Add a section = append an entry below. Add a category = extend CATEGORIES.
+ */
+
+export interface Section {
+  id: string;
+  name: string;
+  category: string;
+  /** Optional preview image URL; the gallery falls back to a gradient + name. */
+  thumb?: string;
+  /** PascalCase component name used for the import + JSX tag. */
+  importName: string;
+  /** Full self-contained TSX module (default export). */
+  code: string;
+}
+
+export const CATEGORIES = [
+  "Headers",
+  "AI Widgets",
+  "Products & Features",
+  "How It Works",
+  "About / Team",
+  "Blog & Press",
+  "Testimonials",
+  "Text",
+  "Forms & FAQ",
+  "Gallery & Media",
+  "Pricing",
+  "Call to Action",
+  "Footer",
+] as const;
+
+export type Category = (typeof CATEGORIES)[number];
+
+const section = (s: Section) => s;
+
+export const SECTIONS: Section[] = [
+  section({
+    id: "split-image-left",
+    name: "Split Image Left",
+    category: "Headers",
+    importName: "SplitImageLeftHero",
+    code: `export default function SplitImageLeftHero() {
+  return (
+    <section style={{ display: "flex", flexWrap: "wrap", alignItems: "center", gap: 32, padding: "64px 24px", background: "#0f172a", color: "#fff" }}>
+      <div style={{ flex: "1 1 320px", minWidth: 280 }}>
+        <h1 style={{ fontSize: 40, fontWeight: 800, margin: "0 0 12px", lineHeight: 1.1 }}>Welcome to Our Business</h1>
+        <p style={{ fontSize: 18, opacity: 0.8, margin: "0 0 24px" }}>We deliver exceptional service tailored to you.</p>
+        <a href="#" style={{ display: "inline-block", background: "#fff", color: "#0f172a", padding: "12px 24px", borderRadius: 8, fontWeight: 600, textDecoration: "none" }}>Get Started</a>
+      </div>
+      <div style={{ flex: "1 1 320px", minWidth: 280, height: 280, borderRadius: 16, background: "linear-gradient(135deg,#6366f1,#8b5cf6)" }} />
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "centered-hero",
+    name: "Centered Hero",
+    category: "Headers",
+    importName: "CenteredHero",
+    code: `export default function CenteredHero() {
+  return (
+    <section style={{ textAlign: "center", padding: "96px 24px", background: "#fff", color: "#0f172a" }}>
+      <h1 style={{ fontSize: 48, fontWeight: 800, margin: "0 0 16px", lineHeight: 1.1 }}>Build something people love</h1>
+      <p style={{ fontSize: 20, color: "#475569", maxWidth: 640, margin: "0 auto 32px" }}>A clear, compelling subheadline that explains the value in one sentence.</p>
+      <div style={{ display: "flex", gap: 12, justifyContent: "center", flexWrap: "wrap" }}>
+        <a href="#" style={{ background: "#4f46e5", color: "#fff", padding: "12px 28px", borderRadius: 8, fontWeight: 600, textDecoration: "none" }}>Get Started</a>
+        <a href="#" style={{ border: "1px solid #cbd5e1", color: "#0f172a", padding: "12px 28px", borderRadius: 8, fontWeight: 600, textDecoration: "none" }}>Learn More</a>
+      </div>
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "feature-grid",
+    name: "Three-Up Features",
+    category: "Products & Features",
+    importName: "ThreeUpFeatures",
+    code: `export default function ThreeUpFeatures() {
+  const items = [
+    { t: "Fast", d: "Ships in milliseconds, not minutes." },
+    { t: "Reliable", d: "Battle-tested and production ready." },
+    { t: "Simple", d: "An API you can learn in an afternoon." },
+  ];
+  return (
+    <section style={{ padding: "72px 24px", background: "#f8fafc", color: "#0f172a" }}>
+      <h2 style={{ textAlign: "center", fontSize: 32, fontWeight: 800, margin: "0 0 48px" }}>Everything you need</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 24, maxWidth: 1000, margin: "0 auto" }}>
+        {items.map((it) => (
+          <div key={it.t} style={{ background: "#fff", border: "1px solid #e2e8f0", borderRadius: 12, padding: 24 }}>
+            <h3 style={{ fontSize: 20, fontWeight: 700, margin: "0 0 8px" }}>{it.t}</h3>
+            <p style={{ color: "#475569", margin: 0 }}>{it.d}</p>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "pricing-three-tier",
+    name: "Three-Tier Pricing",
+    category: "Pricing",
+    importName: "ThreeTierPricing",
+    code: `export default function ThreeTierPricing() {
+  const tiers = [
+    { name: "Starter", price: "$0", features: ["1 project", "Community support"] },
+    { name: "Pro", price: "$29", features: ["Unlimited projects", "Priority support", "Analytics"] },
+    { name: "Team", price: "$99", features: ["Everything in Pro", "SSO", "Audit logs"] },
+  ];
+  return (
+    <section style={{ padding: "72px 24px", background: "#fff", color: "#0f172a" }}>
+      <h2 style={{ textAlign: "center", fontSize: 32, fontWeight: 800, margin: "0 0 48px" }}>Simple pricing</h2>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(240px,1fr))", gap: 24, maxWidth: 960, margin: "0 auto" }}>
+        {tiers.map((t) => (
+          <div key={t.name} style={{ border: "1px solid #e2e8f0", borderRadius: 12, padding: 28 }}>
+            <h3 style={{ fontSize: 18, fontWeight: 700, margin: "0 0 4px" }}>{t.name}</h3>
+            <p style={{ fontSize: 36, fontWeight: 800, margin: "0 0 16px" }}>{t.price}<span style={{ fontSize: 14, fontWeight: 400, color: "#64748b" }}>/mo</span></p>
+            <ul style={{ listStyle: "none", padding: 0, margin: "0 0 24px", color: "#475569" }}>
+              {t.features.map((f) => (<li key={f} style={{ padding: "4px 0" }}>✓ {f}</li>))}
+            </ul>
+            <a href="#" style={{ display: "block", textAlign: "center", background: "#4f46e5", color: "#fff", padding: "10px 0", borderRadius: 8, fontWeight: 600, textDecoration: "none" }}>Choose</a>
+          </div>
+        ))}
+      </div>
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "testimonial-quote",
+    name: "Single Quote",
+    category: "Testimonials",
+    importName: "SingleQuote",
+    code: `export default function SingleQuote() {
+  return (
+    <section style={{ padding: "80px 24px", background: "#0f172a", color: "#fff", textAlign: "center" }}>
+      <p style={{ fontSize: 28, fontWeight: 600, maxWidth: 720, margin: "0 auto 24px", lineHeight: 1.4 }}>
+        “This product changed how our whole team works. We shipped in days what used to take months.”
+      </p>
+      <p style={{ opacity: 0.7, margin: 0 }}>— Alex Rivera, CEO at Acme</p>
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "cta-banner",
+    name: "CTA Banner",
+    category: "Call to Action",
+    importName: "CtaBanner",
+    code: `export default function CtaBanner() {
+  return (
+    <section style={{ padding: "64px 24px", background: "linear-gradient(135deg,#4f46e5,#8b5cf6)", color: "#fff", textAlign: "center" }}>
+      <h2 style={{ fontSize: 32, fontWeight: 800, margin: "0 0 12px" }}>Ready to get started?</h2>
+      <p style={{ fontSize: 18, opacity: 0.9, margin: "0 0 28px" }}>Join thousands of teams building with us today.</p>
+      <a href="#" style={{ display: "inline-block", background: "#fff", color: "#4f46e5", padding: "14px 32px", borderRadius: 8, fontWeight: 700, textDecoration: "none" }}>Start free trial</a>
+    </section>
+  );
+}
+`,
+  }),
+  section({
+    id: "footer-simple",
+    name: "Simple Footer",
+    category: "Footer",
+    importName: "SimpleFooter",
+    code: `export default function SimpleFooter() {
+  return (
+    <footer style={{ padding: "48px 24px", background: "#0f172a", color: "#cbd5e1" }}>
+      <div style={{ display: "flex", flexWrap: "wrap", justifyContent: "space-between", gap: 24, maxWidth: 1000, margin: "0 auto" }}>
+        <div style={{ fontWeight: 700, fontSize: 18, color: "#fff" }}>Your Brand</div>
+        <nav style={{ display: "flex", gap: 24, flexWrap: "wrap" }}>
+          <a href="#" style={{ color: "#cbd5e1", textDecoration: "none" }}>About</a>
+          <a href="#" style={{ color: "#cbd5e1", textDecoration: "none" }}>Pricing</a>
+          <a href="#" style={{ color: "#cbd5e1", textDecoration: "none" }}>Contact</a>
+        </nav>
+      </div>
+      <p style={{ textAlign: "center", marginTop: 32, fontSize: 13, opacity: 0.6 }}>© 2025 Your Brand. All rights reserved.</p>
+    </footer>
+  );
+}
+`,
+  }),
+];
+
+const byId = new Map(SECTIONS.map((s) => [s.id, s]));
+
+export function getSection(id: string): Section | undefined {
+  return byId.get(id);
+}
+
+/** Repo-relative path the section's component is written to on sync/save. */
+export function sectionFilePath(id: string): string {
+  return `components/site-editor-sections/${id}.tsx`;
+}

@@ -103,6 +103,54 @@ export function applyTextEdits(
   return out;
 }
 
+/**
+ * Append pre-built sections to a route file. Each addition carries a ready
+ * `importLine` (e.g. `import Hero from "../components/.../hero"`) and a `tag`
+ * (e.g. `<Hero />`). Imports land after the last top-level import; tags land
+ * just before the file's last closing JSX tag (the page's root element close).
+ *
+ * Idempotent: an addition whose `importLine` already appears is skipped, so
+ * re-running on the full pending state (every preview sync) never duplicates.
+ *
+ * ponytail: heuristic — assumes the route file's page returns a single root
+ * element and is the last JSX in the file. If a page's shape defeats this,
+ * upgrade to a Babel/JSX walk keyed by the default export. Self-check below.
+ */
+export function applySectionAdds(
+  source: string,
+  additions: { importLine: string; tag: string }[],
+): string {
+  const fresh = additions.filter((a) => !source.includes(a.importLine.trim()));
+  if (fresh.length === 0) return source;
+
+  let out = source;
+
+  // Insert imports after the last top-level `import ... ` statement.
+  const importRe = /^[ \t]*import\b.*$/gm;
+  let lastImportEnd = -1;
+  for (const m of out.matchAll(importRe)) {
+    lastImportEnd = m.index! + m[0].length;
+  }
+  const importBlock = fresh.map((a) => a.importLine).join("\n");
+  if (lastImportEnd >= 0) {
+    out = out.slice(0, lastImportEnd) + "\n" + importBlock + out.slice(lastImportEnd);
+  } else {
+    out = importBlock + "\n" + out;
+  }
+
+  // Insert tags before the last closing JSX tag (`</X>` or `</>`).
+  const closeRe = /<\/[A-Za-z][\w.]*\s*>|<\/>/g;
+  let lastClose = -1;
+  for (const m of out.matchAll(closeRe)) {
+    lastClose = m.index!;
+  }
+  const tagBlock = fresh.map((a) => "      " + a.tag).join("\n");
+  if (lastClose >= 0) {
+    out = out.slice(0, lastClose) + tagBlock + "\n      " + out.slice(lastClose);
+  }
+  return out;
+}
+
 function escapeJsxText(value: string): string {
   return value.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[{}]/g, (c) =>
     c === "{" ? "&#123;" : "&#125;",
@@ -113,3 +161,40 @@ function escapeForQuote(value: string, quote: string): string {
   const esc = value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
   return esc.split(quote).join(`\\${quote}`);
 }
+
+/**
+ * Self-check for applySectionAdds. Run: `npx tsx src/lib/editor/ast.ts`.
+ * Asserts the import lands after existing imports and the tag lands inside the
+ * root element, and that a second run is idempotent.
+ */
+export function __sectionDemo(): void {
+  const page = [
+    `import Image from "next/image";`,
+    ``,
+    `export default function Home() {`,
+    `  return (`,
+    `    <main>`,
+    `      <h1>Hi</h1>`,
+    `    </main>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+  const add = [
+    { importLine: `import Hero from "../components/site-editor-sections/hero";`, tag: `<Hero />` },
+  ];
+  const once = applySectionAdds(page, add);
+  console.assert(once.includes(`import Hero from`), "import not inserted");
+  console.assert(
+    once.indexOf(`import Hero`) > once.indexOf(`import Image`),
+    "import not placed after existing imports",
+  );
+  console.assert(
+    once.indexOf(`<Hero />`) > once.indexOf(`<h1>Hi</h1>`) &&
+      once.indexOf(`<Hero />`) < once.indexOf(`</main>`),
+    "tag not inside root element",
+  );
+  console.assert(applySectionAdds(once, add) === once, "not idempotent");
+  console.log("applySectionAdds self-check OK\n" + once);
+}
+
+if (process.argv[1] && /ast\.ts$/.test(process.argv[1])) __sectionDemo();

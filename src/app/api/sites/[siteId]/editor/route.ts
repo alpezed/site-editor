@@ -6,6 +6,8 @@ import { prisma } from "@/lib/prisma";
 const stateSchema = z.object({
   pending: z.record(z.string(), z.record(z.string(), z.string())),
   textEdits: z.record(z.string(), z.string()).optional(),
+  sections: z.array(z.string()).optional(),
+  fileOverrides: z.record(z.string(), z.string()).optional(),
   activeRoute: z.string().nullish(),
   activeFile: z.string().nullish(),
 });
