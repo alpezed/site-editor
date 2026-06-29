@@ -67,3 +67,49 @@ function rewriteContentKey(
 function escapeRegex(s: string): string {
   return s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
+
+/**
+ * Click-to-edit text replacements. Each edit is the original visible text and
+ * its replacement; we rewrite that text where it appears as JSX text content or
+ * a string literal. Matching is by value (the editor has no DOM→source map), so
+ * the original text must be reasonably unique.
+ *
+ * ponytail: naive value-based global replace. Collisions (same string in two
+ * places, or text split across JSX expressions) are not handled — upgrade to a
+ * Babel/JSX AST walk keyed by source position if that bites.
+ */
+export function applyTextEdits(
+  source: string,
+  edits: { from: string; to: string }[],
+): string {
+  let out = source;
+  for (const { from, to } of edits) {
+    const trimmed = from.trim();
+    if (!trimmed) continue;
+    const f = escapeRegex(trimmed);
+
+    // 1) JSX text node:  >  Welcome  <   (allow surrounding whitespace)
+    out = out.replace(
+      new RegExp(`(>\\s*)${f}(\\s*<)`, "g"),
+      (_m, a, b) => `${a}${escapeJsxText(to)}${b}`,
+    );
+
+    // 2) String literal:  "Welcome" / 'Welcome' / \`Welcome\`
+    out = out.replace(
+      new RegExp(`(["'\`])${f}\\1`, "g"),
+      (_m, q) => `${q}${escapeForQuote(to, q)}${q}`,
+    );
+  }
+  return out;
+}
+
+function escapeJsxText(value: string): string {
+  return value.replace(/</g, "&lt;").replace(/>/g, "&gt;").replace(/[{}]/g, (c) =>
+    c === "{" ? "&#123;" : "&#125;",
+  );
+}
+
+function escapeForQuote(value: string, quote: string): string {
+  const esc = value.replace(/\\/g, "\\\\").replace(/\n/g, "\\n");
+  return esc.split(quote).join(`\\${quote}`);
+}

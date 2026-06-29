@@ -5,8 +5,9 @@ import { prisma } from "@/lib/prisma";
 
 const stateSchema = z.object({
   pending: z.record(z.string(), z.record(z.string(), z.string())),
-  activeRoute: z.string().optional(),
-  activeFile: z.string().optional(),
+  textEdits: z.record(z.string(), z.string()).optional(),
+  activeRoute: z.string().nullish(),
+  activeFile: z.string().nullish(),
 });
 
 async function ownedSite(siteId: string, userId: string) {

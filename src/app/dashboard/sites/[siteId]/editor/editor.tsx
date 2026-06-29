@@ -43,10 +43,16 @@ export function Editor(props: Props) {
   const [pending, setPending] = useState<EditorState["pending"]>(
     props.initialState.pending ?? {},
   );
+  const [textEdits, setTextEdits] = useState<Record<string, string>>(
+    props.initialState.textEdits ?? {},
+  );
   const [saving, setSaving] = useState(false);
   const [status, setStatus] = useState<string | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(props.previewUrl);
   const [startingPreview, setStartingPreview] = useState(false);
+  // Bumped after publish to force-remount the iframe so the dev server re-renders
+  // the freshly-synced files instead of the stale contentEditable DOM.
+  const [iframeNonce, setIframeNonce] = useState(0);
 
   const activeComponent = useMemo(
     () => metadata.components.find((c) => c.filePath === activeFile) ?? null,
@@ -54,23 +60,36 @@ export function Editor(props: Props) {
   );
 
   const pendingCount = useMemo(
-    () => Object.values(pending).reduce((n, f) => n + Object.keys(f).length, 0),
-    [pending],
+    () =>
+      Object.values(pending).reduce((n, f) => n + Object.keys(f).length, 0) +
+      Object.keys(textEdits).length,
+    [pending, textEdits],
   );
 
-  // Debounced autosave of editor state.
+  // Latest state in refs so the debounced persist never reads stale closures.
+  const pendingRef = useRef(pending);
+  const textEditsRef = useRef(textEdits);
+  pendingRef.current = pending;
+  textEditsRef.current = textEdits;
+
+  // Debounced autosave of editor state. `syncSandbox` is for field edits, which
+  // must be pushed into the sandbox; click-to-edit text already shows live in
+  // the iframe, so it skips the sync.
   const saveTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const autosave = useCallback(
-    (next: EditorState["pending"]) => {
+  const persist = useCallback(
+    (syncSandbox: boolean) => {
       if (saveTimer.current) clearTimeout(saveTimer.current);
       saveTimer.current = setTimeout(async () => {
         await fetch(`/api/sites/${props.siteId}/editor`, {
           method: "PUT",
           headers: { "content-type": "application/json" },
-          body: JSON.stringify({ pending: next, activeFile }),
+          body: JSON.stringify({
+            pending: pendingRef.current,
+            textEdits: textEditsRef.current,
+            activeFile,
+          }),
         }).catch(() => {});
-        // Hot-reload the running sandbox with the latest edits.
-        if (previewUrl) {
+        if (syncSandbox && previewUrl) {
           fetch(`/api/sites/${props.siteId}/preview/sync`, {
             method: "POST",
           }).catch(() => {});
@@ -79,6 +98,20 @@ export function Editor(props: Props) {
     },
     [props.siteId, activeFile, previewUrl],
   );
+
+  // Receive click-to-edit changes from the preview iframe agent.
+  useEffect(() => {
+    function onMessage(e: MessageEvent) {
+      const d = e.data;
+      if (!d || d.source !== "site-editor" || d.type !== "edit") return;
+      const { oldText, newText } = d as { oldText: string; newText: string };
+      if (!oldText || oldText === newText) return;
+      setTextEdits((prev) => ({ ...prev, [oldText]: newText }));
+      persist(false);
+    }
+    window.addEventListener("message", onMessage);
+    return () => window.removeEventListener("message", onMessage);
+  }, [persist]);
 
   async function startPreview() {
     setStartingPreview(true);
@@ -103,7 +136,8 @@ export function Editor(props: Props) {
         ...prev,
         [filePath]: { ...prev[filePath], [field]: value },
       };
-      autosave(next);
+      pendingRef.current = next;
+      persist(true);
       return next;
     });
   }
@@ -126,6 +160,8 @@ export function Editor(props: Props) {
       const data = await res.json();
       if (!res.ok) throw new Error(data.error ?? "Save failed");
       setPending({});
+      setTextEdits({});
+      setIframeNonce((n) => n + 1);
       setStatus(
         `Committed ${data.commitHash?.slice(0, 7)} · ${data.filesChanged} file(s) · deploying`,
       );
@@ -255,6 +291,7 @@ export function Editor(props: Props) {
         <main className="min-w-0 flex-1 bg-muted/30">
           {previewUrl ? (
             <iframe
+              key={iframeNonce}
               src={previewUrl}
               className="h-full w-full border-0 bg-white"
               title="Live preview"
@@ -265,7 +302,8 @@ export function Editor(props: Props) {
                 <p className="font-medium">Live preview not running</p>
                 <p>
                   Spin up an isolated E2B sandbox that clones your repo, installs
-                  deps and runs the dev server with hot reload.
+                  deps and runs the dev server. Then click any text on the page
+                  to edit it inline.
                 </p>
                 <Button onClick={startPreview} disabled={startingPreview || !props.imported}>
                   {startingPreview ? "Starting sandbox…" : "Start live preview"}
@@ -280,6 +318,47 @@ export function Editor(props: Props) {
 
         {/* Right: inspector */}
         <aside className="w-80 shrink-0 overflow-y-auto border-l p-4">
+          {Object.keys(textEdits).length > 0 && (
+            <div className="mb-4">
+              <h2 className="mb-2 text-sm font-semibold">
+                Content edits ({Object.keys(textEdits).length})
+              </h2>
+              <ul className="space-y-1.5">
+                {Object.entries(textEdits).map(([from, to]) => (
+                  <li
+                    key={from}
+                    className="flex items-start gap-2 rounded border px-2 py-1.5 text-xs"
+                  >
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-muted-foreground line-through">
+                        {from}
+                      </span>
+                      <span className="block truncate">{to}</span>
+                    </span>
+                    <button
+                      className="text-muted-foreground hover:text-foreground"
+                      title="Drop this edit from publish"
+                      onClick={() => {
+                        setTextEdits((prev) => {
+                          const next = { ...prev };
+                          delete next[from];
+                          textEditsRef.current = next;
+                          persist(false);
+                          return next;
+                        });
+                      }}
+                    >
+                      ✕
+                    </button>
+                  </li>
+                ))}
+              </ul>
+              <p className="mt-1.5 text-[10px] text-muted-foreground">
+                Click text in the preview to edit. Reverting here drops it from
+                the next publish (reload preview to undo visually).
+              </p>
+            </div>
+          )}
           <h2 className="mb-3 text-sm font-semibold">Properties</h2>
           {activeComponent ? (
             <Inspector

@@ -105,6 +105,24 @@ export async function syncPreview(siteId: string, userId: string) {
   return { written: files.length };
 }
 
+/**
+ * Resolve the preview URL for page load. Sandboxes expire on inactivity, but
+ * `previewUrl` is persisted — so verify the sandbox still exists and clear the
+ * stale URL if it's gone, otherwise the iframe renders "Sandbox Not Found".
+ */
+export async function livePreviewUrl(siteId: string): Promise<string | null> {
+  const session = await latestSession(siteId);
+  if (!session?.sandboxId || !session.previewUrl) return null;
+  if (await getSandboxDriver().isAlive(session.sandboxId)) {
+    return session.previewUrl;
+  }
+  await prisma.editorSession.update({
+    where: { id: session.id },
+    data: { sandboxId: null, previewUrl: null },
+  });
+  return null;
+}
+
 /** Tear down the preview sandbox for a site. */
 export async function stopPreview(siteId: string, userId: string) {
   const site = await loadSite(siteId, userId);

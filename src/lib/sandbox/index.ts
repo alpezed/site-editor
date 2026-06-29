@@ -24,6 +24,9 @@ const mockDriver: SandboxDriver = {
   async logs() {
     return ["[mock] sandbox running", "[mock] ready on :3000"];
   },
+  async isAlive() {
+    return true;
+  },
   async destroy() {
     /* no-op */
   },

@@ -3,6 +3,7 @@ import { requireUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import type { EditorState } from "@/lib/editor/types";
+import { livePreviewUrl } from "@/lib/sandbox/service";
 import { Editor } from "./editor";
 
 export default async function EditorPage({
@@ -42,7 +43,7 @@ export default async function EditorPage({
       repositoryName={site.repository.repositoryName}
       branch={site.repository.branch}
       imported={Boolean(site.repository.importedAt)}
-      previewUrl={site.editorSessions[0]?.previewUrl ?? null}
+      previewUrl={await livePreviewUrl(site.id)}
       metadata={metadata}
       initialState={initialState}
       latestDeploymentStatus={site.deployments[0]?.status ?? null}

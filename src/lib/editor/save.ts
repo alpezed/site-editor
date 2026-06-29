@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
-import { commitFiles, getFileContent } from "@/lib/github/app";
-import { applyFieldEdits } from "@/lib/editor/ast";
+import { commitFiles, getFileContent, getTree } from "@/lib/github/app";
+import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
 import { recordDeployment } from "@/lib/deploy/service";
 import { logAudit } from "@/lib/audit";
 import { DeploymentTrigger } from "@prisma/client";
@@ -42,20 +42,51 @@ export async function saveSite(opts: {
   const state =
     (session?.state as unknown as EditorState | undefined) ?? { pending: {} };
   const pending = state.pending ?? {};
+  const textEdits = state.textEdits ?? {};
 
   const [owner, repoName] = repo.repositoryName.split("/");
   const branch = repo.branch || repo.defaultBranch;
 
-  const changes: { path: string; content: string }[] = [];
+  // Build edits per file. Field edits target known files; click-to-edit text
+  // edits are matched by value across the repo's code files. `orig`/`edited`
+  // track each file's fetched source vs. its mutated copy.
+  const orig = new Map<string, string>();
+  const edited = new Map<string, string>();
+  const load = async (p: string) => {
+    if (!orig.has(p)) {
+      const c = await getFileContent(connection, owner, repoName, p, branch);
+      if (c != null) {
+        orig.set(p, c);
+        edited.set(p, c);
+      }
+    }
+    return edited.get(p);
+  };
+
   for (const [filePath, fields] of Object.entries(pending)) {
-    const current = await getFileContent(connection, owner, repoName, filePath, branch);
+    const current = await load(filePath);
     if (current == null) continue;
-    const edits = Object.entries(fields).map(([field, value]) => ({
-      field,
-      value,
-    }));
-    const next = applyFieldEdits(current, edits);
-    if (next !== current) changes.push({ path: filePath, content: next });
+    const fieldEdits = Object.entries(fields).map(([field, value]) => ({ field, value }));
+    edited.set(filePath, applyFieldEdits(current, fieldEdits));
+  }
+
+  const textEditList = Object.entries(textEdits).map(([from, to]) => ({ from, to }));
+  if (textEditList.length > 0) {
+    // ponytail: scan up to 200 code files; large repos truncate silently.
+    const tree = await getTree(connection, owner, repoName, branch);
+    const codeFiles = tree
+      .filter((p) => /\.(tsx|jsx|ts|js|mdx)$/.test(p) && !p.includes("node_modules"))
+      .slice(0, 200);
+    for (const p of codeFiles) {
+      const current = await load(p);
+      if (current == null) continue;
+      edited.set(p, applyTextEdits(current, textEditList));
+    }
+  }
+
+  const changes: { path: string; content: string }[] = [];
+  for (const [path, content] of edited) {
+    if (content !== orig.get(path)) changes.push({ path, content });
   }
 
   if (changes.length === 0) {
@@ -77,11 +108,24 @@ export async function saveSite(opts: {
     trigger: DeploymentTrigger.AUTOMATIC,
   });
 
+  // Mirror the committed files into the running preview sandbox so the iframe
+  // reflects what was published. Text (click-to-edit) edits are otherwise never
+  // written to the sandbox — they only live in the iframe's contentEditable DOM
+  // — so a reload would render the stale clone. Best-effort: the commit stands.
+  if (session?.sandboxId) {
+    try {
+      const { getSandboxDriver } = await import("@/lib/sandbox");
+      await getSandboxDriver().writeFiles(session.sandboxId, changes);
+    } catch {
+      // preview refresh is best-effort; publish already succeeded.
+    }
+  }
+
   // Clear pending edits now they're committed.
   if (session) {
     await prisma.editorSession.update({
       where: { id: session.id },
-      data: { state: { ...state, pending: {} } as object },
+      data: { state: { ...state, pending: {}, textEdits: {} } as object },
     });
   }
 

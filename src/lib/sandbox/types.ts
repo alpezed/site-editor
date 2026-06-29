@@ -17,6 +17,8 @@ export interface SandboxDriver {
   ): Promise<void>;
   /** Recent console output from the dev server. */
   logs(sandboxId: string): Promise<string[]>;
+  /** Whether the sandbox still exists (they expire on inactivity timeout). */
+  isAlive(sandboxId: string): Promise<boolean>;
   /** Tear down the sandbox. */
   destroy(sandboxId: string): Promise<void>;
 }
