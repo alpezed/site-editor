@@ -269,6 +269,7 @@ export function Editor(props: Props) {
           tag: d.tag,
           classes: d.classes ?? [],
           text: d.text,
+          anchor: d.anchor,
           sectionKey: d.sectionKey,
         });
         // Refresh the layers tree alongside selection.
@@ -353,9 +354,11 @@ export function Editor(props: Props) {
     const key = crypto.randomUUID();
     const next = [...sectionsRef.current];
     // Insert after the "Add below" anchor instance, else append. The clicked
-    // element's text anchors the source splice so it persists in place.
+    // element's text anchors the source splice so it persists in place — falling
+    // back to the current selection so a left-panel add also lands where you are.
     const afterKey = addBelowAfterKey.current;
-    const afterAnchor = addBelowAnchor.current;
+    const afterAnchor =
+      addBelowAnchor.current ?? useEditorStore.getState().selection?.anchor ?? null;
     addBelowAfterKey.current = null;
     addBelowAnchor.current = null;
     const inst: SectionInstance = afterAnchor ? { key, id, afterAnchor } : { key, id };

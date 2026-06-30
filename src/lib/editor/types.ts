@@ -54,6 +54,9 @@ export interface Selection {
   classes: string[];
   /** Visible text, when the element is a text leaf. */
   text?: string;
+  /** Normalized visible text of the element — anchors where a newly added
+   *  element is inserted (after this one) in source. Set for every selection. */
+  anchor?: string;
   /** data-section-key of the enclosing gallery section, if any. */
   sectionKey?: string;
 }

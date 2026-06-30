@@ -112,11 +112,13 @@ export const EDITOR_AGENT_JS = String.raw`
     wrap.setAttribute("data-site-editor-injected", "");
     if (key) wrap.setAttribute("data-section-key", key);
     wrap.innerHTML = html;
-    if (addBelowAnchor && addBelowAnchor.parentNode) {
-      addBelowAnchor.after(wrap);
-    } else {
-      (document.querySelector("main") || document.body).appendChild(wrap);
-    }
+    // Place after the "Add below" anchor, else after the currently selected
+    // element, else append to main — matching where it persists in source.
+    var anchor = (addBelowAnchor && addBelowAnchor.parentNode)
+      ? addBelowAnchor
+      : (selected && selected.parentNode) ? selected : null;
+    if (anchor) anchor.after(wrap);
+    else (document.querySelector("main") || document.body).appendChild(wrap);
     addBelowAnchor = null;
     wrap.scrollIntoView({ behavior: "smooth", block: "center" });
   }
@@ -211,6 +213,7 @@ export const EDITOR_AGENT_JS = String.raw`
         tag: el.tagName.toLowerCase(),
         classes: (el.getAttribute("class") || "").split(/\s+/).filter(Boolean),
         text: isTextLeaf(el) ? el.textContent.trim() : undefined,
+        anchor: anchorOf(el),
         sectionKey: wrap ? wrap.getAttribute("data-section-key") : undefined,
       },
       "*",
