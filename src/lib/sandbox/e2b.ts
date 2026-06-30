@@ -89,7 +89,7 @@ export const e2bDriver: SandboxDriver = {
 		if (!templateId || templateId.trim() === '') {
 			throw new Error(
 				'E2B_TEMPLATE_ID is unset. The editor preview requires the custom ' +
-					'mythos-site-base template (4 GB RAM) — the default `base` template ' +
+					'site-editor-base template (4 GB RAM) — the default `base` template ' +
 					'(512 MB) OOM-kills Node during Next 15 compile and leaves port 3000 ' +
 					'dead. Fix: (1) `cd sandbox-templates/e2b-base && e2b template build`, ' +
 					'(2) `vercel env add E2B_TEMPLATE_ID production` with the printed ID, ' +

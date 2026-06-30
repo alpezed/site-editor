@@ -1,4 +1,4 @@
-// mythos-site-base — custom E2B template for the website builder.
+// site-editor-base — custom E2B template for the website builder.
 //
 // Migrated from e2b.Dockerfile (kept as e2b.Dockerfile.old) to the e2b v2.31
 // `Template()` SDK builder. Build with `npm run e2b:build:dev` /
