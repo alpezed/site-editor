@@ -320,14 +320,22 @@ export const EDITOR_AGENT_JS = String.raw`
     );
   }
 
-  function mkBtn(label, handler, opts) {
+  function icon(path) {
+    return '<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">' +
+      path + "</svg>";
+  }
+
+  // Icon-only action button with a native tooltip (title). No React in the iframe.
+  function mkBtn(title, svg, handler, opts) {
     var b = document.createElement("button");
-    b.textContent = label;
+    b.innerHTML = svg;
+    b.title = title;
+    b.setAttribute("aria-label", title);
     var bg = (opts && opts.bg) || "#27272a";
     var fg = (opts && opts.fg) || "#e4e4e7";
     b.style.cssText =
-      "border:0;border-radius:6px;padding:5px 9px;cursor:pointer;font:600 12px system-ui,sans-serif;background:" +
-      bg + ";color:" + fg + ";line-height:1;";
+      "border:0;border-radius:6px;padding:6px;cursor:pointer;display:flex;align-items:center;justify-content:center;background:" +
+      bg + ";color:" + fg + ";line-height:0;";
     b.onmousedown = function (ev) { ev.preventDefault(); };
     b.onclick = function (ev) {
       ev.preventDefault();
@@ -350,11 +358,11 @@ export const EDITOR_AGENT_JS = String.raw`
       "background:#ea580c;color:#fff;border-radius:6px;padding:5px 9px;font:600 12px system-ui,sans-serif;line-height:1;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
     bar.appendChild(label);
 
-    bar.appendChild(mkBtn("↑", function () { sendOp("move-up"); }));
-    bar.appendChild(mkBtn("↓", function () { sendOp("move-down"); }));
-    bar.appendChild(mkBtn("Duplicate", function () { sendOp("duplicate"); }));
-    bar.appendChild(mkBtn("+ Add below", function () { sendOp("add-below"); }));
-    bar.appendChild(mkBtn("Delete", function () { sendOp("delete"); }, { fg: "#f87171" }));
+    bar.appendChild(mkBtn("Move up", icon('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'), function () { sendOp("move-up"); }));
+    bar.appendChild(mkBtn("Move down", icon('<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'), function () { sendOp("move-down"); }));
+    bar.appendChild(mkBtn("Duplicate", icon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'), function () { sendOp("duplicate"); }));
+    bar.appendChild(mkBtn("Add below", icon('<path d="M12 5v14"/><path d="M5 12h14"/>'), function () { sendOp("add-below"); }));
+    bar.appendChild(mkBtn("Delete", icon('<path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'), function () { sendOp("delete"); }, { fg: "#f87171" }));
 
     document.body.appendChild(bar);
     positionBar();

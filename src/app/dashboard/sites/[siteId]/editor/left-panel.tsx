@@ -3,6 +3,7 @@
 import { useMemo, useState } from "react";
 import {
   Plus,
+  X,
   GripVertical,
   ChevronRight,
   Square,
@@ -35,6 +36,8 @@ import { cn } from "@/lib/utils";
 type Tab = "add" | "layers";
 
 export function LeftPanel(props: {
+  tab: Tab;
+  onClose: () => void;
   sections: SectionInstance[];
   tree: TreeNode[];
   selectedSxId: string | null;
@@ -42,16 +45,20 @@ export function LeftPanel(props: {
   onSelect: (sxId: string) => void;
   onReorderSections: (orderedKeys: string[]) => void;
 }) {
-  const [tab, setTab] = useState<Tab>("add");
+  const { tab } = props;
   return (
     <div className="flex h-full flex-col">
-      <div className="flex border-b border-zinc-800">
-        <TabButton active={tab === "add"} onClick={() => setTab("add")}>
-          Elements
-        </TabButton>
-        <TabButton active={tab === "layers"} onClick={() => setTab("layers")}>
-          Layers
-        </TabButton>
+      <div className="flex items-center justify-between border-b border-zinc-800 px-3 py-3">
+        <h2 className="text-base font-semibold text-white">
+          {tab === "add" ? "Add Elements" : "Layers"}
+        </h2>
+        <button
+          onClick={props.onClose}
+          title="Close panel"
+          className="rounded-md p-1 text-zinc-400 hover:bg-zinc-800 hover:text-white"
+        >
+          <X className="size-4" />
+        </button>
       </div>
       <div className="min-h-0 flex-1 overflow-y-auto">
         {tab === "add" ? (
@@ -282,26 +289,3 @@ function Collapsible({
   );
 }
 
-function TabButton({
-  active,
-  onClick,
-  children,
-}: {
-  active: boolean;
-  onClick: () => void;
-  children: React.ReactNode;
-}) {
-  return (
-    <button
-      onClick={onClick}
-      className={cn(
-        "flex-1 py-2.5 text-xs font-medium",
-        active
-          ? "border-b-2 border-orange-500 text-white"
-          : "text-zinc-400 hover:text-zinc-200",
-      )}
-    >
-      {children}
-    </button>
-  );
-}

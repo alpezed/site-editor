@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
-import { Pencil } from "lucide-react";
+import { Pencil, Plus, Layers, Settings, LogOut } from "lucide-react";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import {
   type EditorState,
@@ -46,6 +46,7 @@ export function Editor(props: Props) {
   const [mode, setMode] = useState<EditorMode>("build");
   const [device, setDevice] = useState<Device>("desktop");
   const [editMode, setEditMode] = useState(false);
+  const [leftPanel, setLeftPanel] = useState<"add" | "layers" | null>(null);
 
   const [activeFile] = useState<string | null>(
     metadata.components[0]?.filePath ?? null,
@@ -524,17 +525,64 @@ export function Editor(props: Props) {
             instantly-injected section survives the explore→build switch. */}
         {
           <div className="flex h-full">
-            {/* Left panel: Elements + Layers */}
-            <aside className="hidden w-60 shrink-0 border-r border-zinc-800 bg-zinc-950 md:block">
-              <LeftPanel
-                sections={sections}
-                tree={tree}
-                selectedSxId={selection?.sxId ?? null}
-                onAdd={addSection}
-                onSelect={selectInIframe}
-                onReorderSections={reorderSections}
-              />
-            </aside>
+            {/* Far-left icon rail (always visible) */}
+            <nav className="flex w-16 shrink-0 flex-col items-center gap-1 border-r border-zinc-800 bg-zinc-950 py-3">
+              <div className="mb-2 flex size-10 items-center justify-center rounded-xl bg-orange-500 text-lg font-bold text-white">
+                {props.siteName.charAt(0).toUpperCase()}
+              </div>
+              <RailButton
+                title="Add elements"
+                active={leftPanel === "add"}
+                onClick={() =>
+                  setLeftPanel((p) => (p === "add" ? null : "add"))
+                }
+              >
+                <Plus className="size-5" />
+              </RailButton>
+              <RailButton
+                title="Layers"
+                active={leftPanel === "layers"}
+                onClick={() =>
+                  setLeftPanel((p) => (p === "layers" ? null : "layers"))
+                }
+              >
+                <Layers className="size-5" />
+              </RailButton>
+              <div className="mt-auto flex flex-col items-center gap-1">
+                <Link
+                  href={`/dashboard/sites/${props.siteId}/settings`}
+                  title="Settings"
+                  className="flex size-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                >
+                  <Settings className="size-5" />
+                </Link>
+                <form action="/auth/signout" method="post">
+                  <button
+                    type="submit"
+                    title="Sign out"
+                    className="flex size-10 items-center justify-center rounded-lg text-zinc-400 hover:bg-zinc-800 hover:text-white"
+                  >
+                    <LogOut className="size-5" />
+                  </button>
+                </form>
+              </div>
+            </nav>
+
+            {/* Left panel: Elements / Layers — toggled from the rail */}
+            {leftPanel && (
+              <aside className="w-60 shrink-0 border-r border-zinc-800 bg-zinc-950">
+                <LeftPanel
+                  tab={leftPanel}
+                  onClose={() => setLeftPanel(null)}
+                  sections={sections}
+                  tree={tree}
+                  selectedSxId={selection?.sxId ?? null}
+                  onAdd={addSection}
+                  onSelect={selectInIframe}
+                  onReorderSections={reorderSections}
+                />
+              </aside>
+            )}
 
             {/* Preview */}
             <main className="relative min-w-0 flex-1 bg-zinc-900">
@@ -601,10 +649,12 @@ export function Editor(props: Props) {
               )}
             </main>
 
-            {/* Right panel: Styles inspector */}
-            <aside className="hidden w-72 shrink-0 border-l border-zinc-800 bg-zinc-950 text-zinc-100 lg:block">
-              <RightInspector selection={selection} onPatch={onPatch} />
-            </aside>
+            {/* Right panel: Styles inspector — only when an element is selected */}
+            {selection && (
+              <aside className="w-72 shrink-0 border-l border-zinc-800 bg-zinc-950 text-zinc-100">
+                <RightInspector selection={selection} onPatch={onPatch} />
+              </aside>
+            )}
           </div>
         }
 
@@ -645,6 +695,28 @@ export function Editor(props: Props) {
         deployments={props.deployments}
       />
     </div>
+  );
+}
+
+function RailButton(props: {
+  title: string;
+  active: boolean;
+  onClick: () => void;
+  children: React.ReactNode;
+}) {
+  return (
+    <button
+      onClick={props.onClick}
+      title={props.title}
+      className={cn(
+        "flex size-10 items-center justify-center rounded-lg",
+        props.active
+          ? "bg-zinc-800 text-white"
+          : "text-zinc-400 hover:bg-zinc-800 hover:text-white",
+      )}
+    >
+      {props.children}
+    </button>
   );
 }
 
