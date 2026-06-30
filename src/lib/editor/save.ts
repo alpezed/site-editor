@@ -1,7 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { commitFiles, getFileContent, getTree } from "@/lib/github/app";
-import { applyFieldEdits, applySectionAdds, applyTextEdits } from "@/lib/editor/ast";
-import { planSectionsForHome } from "@/lib/editor/sections";
+import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
+import { applySections } from "@/lib/editor/sections";
 import { stripSxIds } from "@/lib/editor/stamp";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import { recordDeployment } from "@/lib/deploy/service";
@@ -74,21 +74,6 @@ export async function saveSite(opts: {
     edited.set(filePath, applyFieldEdits(current, fieldEdits));
   }
 
-  // Sections staged from the gallery: write each instance's component file now.
-  // Home-page tags are appended LAST (after overrides) so a page override can't
-  // wipe them. Written before text edits so section content also receives them.
-  const sectionPlan =
-    sections.length > 0
-      ? await planSectionsForHome(
-          repo.metadata as unknown as ProjectMetadata | null,
-          sections,
-          load,
-        )
-      : null;
-  if (sectionPlan) {
-    for (const f of sectionPlan.files) edited.set(f.path, f.content);
-  }
-
   const textEditList = Object.entries(textEdits).map(([from, to]) => ({ from, to }));
   if (textEditList.length > 0) {
     // ponytail: scan up to 200 code files; large repos truncate silently.
@@ -105,17 +90,19 @@ export async function saveSite(opts: {
     }
   }
 
-  // Whole-file overrides from in-preview element ops win per file.
+  // Whole-file overrides win per file (in-preview inspector/structural ops).
   for (const [p, content] of Object.entries(state.fileOverrides ?? {})) {
     edited.set(p, content);
   }
 
-  // Append section tags to the home page LAST — on top of any override — so the
-  // staged sections are authoritative and never clobbered (idempotent per key).
-  if (sectionPlan) {
-    const base = edited.get(sectionPlan.homePath) ?? sectionPlan.homeSource;
-    edited.set(sectionPlan.homePath, applySectionAdds(base, sectionPlan.additions));
-  }
+  // Added elements: insert each by its stable builder id + write its component
+  // file. Applied LAST so an added element is never clobbered by an override.
+  await applySections(
+    sections,
+    edited,
+    load,
+    repo.metadata as unknown as ProjectMetadata | null,
+  );
 
   const changes: { path: string; content: string }[] = [];
   for (const [path, content] of edited) {

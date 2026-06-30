@@ -10,18 +10,21 @@ export interface FileEdits {
   edits: FieldEdit[];
 }
 
-/** One placement of a gallery section. Each instance gets its own component
- *  file + import + a `data-section-key` wrapper in the page, so two copies of
- *  the same catalog section are independently editable and removable. */
+/** Record of one element/component added from the gallery. Metadata only (the
+ *  added-blocks list + undo): the actual placement lives in `fileOverrides` — at
+ *  add time the element is inserted into the clicked container by its data-sx-id
+ *  loc (deterministic file manipulation) and the resulting file is stored as an
+ *  override. Each instance also has its own component file (also a fileOverride),
+ *  so two copies of the same catalog section are independent. */
 export interface SectionInstance {
-  /** Stable unique id for this placement (drives file name, import + tag key). */
+  /** Stable unique id for this placement (drives the component file name + import). */
   key: string;
   /** Catalog section id this instance was created from. */
   id: string;
-  /** Visible text of the element "Add below" was clicked on. The section tag is
-   *  spliced right after the JSX node rendering this text on sync/save; absent
-   *  for gallery-appended sections (which land at the page end). */
-  afterAnchor?: string;
+  /** Stable builder id (`<file>@<path>`) of the container this was added inside;
+   *  the component tag is inserted as that element's last child on sync/save.
+   *  Absent → appended at the page root. Survives reload (see builder-path.ts). */
+  builderId?: string;
 }
 
 /** Editor session state persisted for autosave. */
@@ -46,6 +49,13 @@ export interface EditorState {
 export interface Selection {
   /** data-sx-id: "<filePath>:<line>:<column>" (column 0-based). */
   sxId: string;
+  /** data-builder-id ("<file>@<path>") of the nearest stamped element — the
+   *  stable anchor used when adding an element inside this one. */
+  builderId?: string | null;
+  /** data-builder-id of the nearest CONTAINER (self or ancestor) that can hold a
+   *  block child — the anchor an "add element" drops into, so adds land where the
+   *  user is even when a leaf (text/button) is selected. null only at the root. */
+  containerBuilderId?: string | null;
   /** Component/display name (React fiber) or tag name. */
   name: string;
   /** Lowercased tag name (div, h1, button…). */
@@ -75,8 +85,11 @@ export function normalizeSections(
   raw: EditorState["sections"],
 ): SectionInstance[] {
   if (!raw) return [];
+  // Coerce bare id-strings (oldest sessions) to instances; keep the builder id.
   return raw.map((s, i) =>
-    typeof s === "string" ? { key: `${s}__${i}`, id: s } : s,
+    typeof s === "string"
+      ? { key: `${s}__${i}`, id: s }
+      : { key: s.key, id: s.id, builderId: s.builderId },
   );
 }
 

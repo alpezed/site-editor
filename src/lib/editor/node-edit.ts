@@ -8,6 +8,7 @@ import {
   swapRanges,
 } from "@/lib/editor/element-ops";
 import { mergeClasses, type TwGroup } from "@/lib/editor/tailwind";
+import { nodeForBuilderId, assignBuilderPaths } from "@/lib/editor/builder-path";
 
 /**
  * Loc-based JSX node edits for the visual inspector. The element is located by
@@ -22,7 +23,12 @@ export type Patch =
   | { kind: "text"; value: string }
   | { kind: "classes"; group: TwGroup; token: string | null }
   | { kind: "attr"; name: string; value: string }
-  | { kind: "op"; op: ElementOp };
+  | { kind: "op"; op: ElementOp }
+  // Insert `tag` as the located element's LAST CHILD (before its closing tag),
+  // optionally adding `importLine` if not already present. This is how the site
+  // builder adds an element/component inside a container — deterministic by loc,
+  // no text anchors. See appendChildToRoot for the no-selection (page root) case.
+  | { kind: "insertChild"; tag: string; importLine?: string };
 
 export interface Loc {
   line: number;
@@ -179,10 +185,98 @@ export function applyNodeEdit(
       source.slice(0, open.end) +
       escapeJsxText(patch.value) +
       source.slice(close.start);
+  } else if (patch.kind === "insertChild") {
+    out = insertBeforeClose(source, el, patch.tag);
+    if (out != null && patch.importLine) out = insertImportLine(out, patch.importLine);
   }
 
   if (out == null) return null;
   // Never emit source that doesn't parse.
+  return parseSafe(out) ? out : null;
+}
+
+/** Splice `tag` in as the element's last child — right before its closing tag,
+ *  reusing the close tag's indentation. null if the element is self-closing. */
+function insertBeforeClose(source: string, el: AnyNode, tag: string): string | null {
+  const close = el.closingElement as AnyNode | null;
+  if (!close) return null;
+  const indent = lineIndent(source, close.start);
+  return source.slice(0, close.start) + tag + "\n" + indent + source.slice(close.start);
+}
+
+/** Add `importLine` after the last top-level import, unless already present. */
+function insertImportLine(source: string, importLine: string): string {
+  if (source.includes(importLine.trim())) return source;
+  const importRe = /^[ \t]*import\b.*$/gm;
+  let lastEnd = -1;
+  for (const m of source.matchAll(importRe)) lastEnd = m.index! + m[0].length;
+  if (lastEnd >= 0) {
+    return source.slice(0, lastEnd) + "\n" + importLine + source.slice(lastEnd);
+  }
+  return importLine + "\n" + source;
+}
+
+/**
+ * Append `tag` as the last child of the element with the given stable builder
+ * path (see builder-path.ts), adding `importLine`. When `builderId` is null (no
+ * element selected) it appends at the file's JSX root. Returns null if the
+ * target can't be found, is self-closing, or the result won't parse.
+ *
+ * This is the builder's insertion primitive: placement is a stable structural
+ * path, so the same call reproduces the same placement on every reload.
+ */
+export function appendChildByBuilderId(
+  source: string,
+  builderId: string | null,
+  tag: string,
+  importLine?: string,
+): string | null {
+  if (builderId == null) return appendChildToRoot(source, tag, importLine);
+  const ast = parseSafe(source);
+  if (!ast) return null;
+  const el = nodeForBuilderId((ast as { program: unknown }).program, builderId) as AnyNode | null;
+  if (!el) return null;
+  let out = insertBeforeClose(source, el, tag);
+  if (out == null) return null;
+  if (importLine) out = insertImportLine(out, importLine);
+  return parseSafe(out) ? out : null;
+}
+
+/**
+ * Append `tag` as the last child of the file's ROOT JSX element (the outermost
+ * one — the page's returned tree), for adds with no element selected. Adds
+ * `importLine` too. Returns null if there's no JSX root or the result won't
+ * parse. Deterministic file manipulation, same as a loc-based insertChild.
+ */
+export function appendChildToRoot(
+  source: string,
+  tag: string,
+  importLine?: string,
+): string | null {
+  const ast = parseSafe(source);
+  if (!ast) return null;
+  // Outermost JSXElement = the one with the widest span.
+  let root: AnyNode | null = null;
+  const walk = (node: unknown) => {
+    if (!node || typeof node !== "object") return;
+    if (Array.isArray(node)) {
+      for (const c of node) walk(c);
+      return;
+    }
+    const n = node as AnyNode;
+    if (n.type === "JSXElement") {
+      if (!root || n.end - n.start > root.end - root.start) root = n;
+    }
+    for (const key of Object.keys(n)) {
+      if (key === "loc" || key === "leadingComments" || key === "trailingComments") continue;
+      walk((n as Record<string, unknown>)[key]);
+    }
+  };
+  walk((ast as { program: unknown }).program);
+  if (!root) return null;
+  let out = insertBeforeClose(source, root, tag);
+  if (out == null) return null;
+  if (importLine) out = insertImportLine(out, importLine);
   return parseSafe(out) ? out : null;
 }
 
@@ -232,6 +326,80 @@ function demo(): void {
 
   // bad loc → null.
   assert(applyNodeEdit(src, { line: 99, column: 0 }, { kind: "text", value: "x" }) === null, "miss should be null");
+
+  // insertChild: new component lands as <main>'s last child, before </main>,
+  // after the existing <p>, and the import is added once.
+  const inserted = applyNodeEdit(src, mainLoc, {
+    kind: "insertChild",
+    tag: "<Hero />",
+    importLine: `import Hero from "./hero";`,
+  })!;
+  assert(inserted != null, "insertChild returned null");
+  assert(
+    inserted.indexOf("<Hero />") > inserted.indexOf("<p>") &&
+      inserted.indexOf("<Hero />") < inserted.indexOf("</main>"),
+    "insertChild not placed as last child: " + inserted,
+  );
+  assert((inserted.match(/import Hero from/g) || []).length === 1, "import not added once");
+
+  // self-closing target can't take a child → null.
+  const sc = `export default () => <img src="x" />;`;
+  assert(
+    applyNodeEdit(sc, { line: 1, column: 19 }, { kind: "insertChild", tag: "<b/>" }) === null,
+    "self-closing insertChild should be null",
+  );
+
+  // appendChildToRoot: no selection → lands inside the root <main>.
+  const atRoot = appendChildToRoot(src, "<Foot />", `import Foot from "./foot";`)!;
+  assert(
+    atRoot.indexOf("<Foot />") < atRoot.indexOf("</main>") &&
+      atRoot.includes(`import Foot from "./foot";`),
+    "appendChildToRoot misplaced: " + atRoot,
+  );
+  // Re-adding the same import doesn't duplicate it (loc-independent path).
+  const atRoot2 = appendChildToRoot(atRoot, "<Foot />", `import Foot from "./foot";`)!;
+  assert((atRoot2.match(/import Foot from/g) || []).length === 1, "import duplicated");
+
+  // ── Stable builder-id placement ──────────────────────────────────────────
+  const page = [
+    `export default function P() {`,
+    `  return (`,
+    `    <main>`,
+    `      <header><h1>Hi</h1></header>`,
+    `      <section><p>One</p></section>`,
+    `    </main>`,
+    `  );`,
+    `}`,
+  ].join("\n");
+  const idOf = (src: string, tag: string): string => {
+    const ast = parseSafe(src)!;
+    const map = assignBuilderPaths((ast as { program: unknown }).program);
+    for (const [n, path] of map) {
+      const open = (n as AnyNode).openingElement as AnyNode | undefined;
+      const name = open && ((open as Record<string, unknown>).name as AnyNode | undefined);
+      if (name && (name as Record<string, unknown>).name === tag) return path;
+    }
+    throw new Error("tag not found: " + tag);
+  };
+  const sectionId = idOf(page, "section");
+
+  // Insert inside <section> by its builder id → lands before </section>.
+  const added = appendChildByBuilderId(page, sectionId, "<Promo />", `import Promo from "./promo";`)!;
+  assert(added != null, "builder insert returned null");
+  assert(
+    added.indexOf("<Promo />") > added.indexOf("<p>One</p>") &&
+      added.indexOf("<Promo />") < added.indexOf("</section>"),
+    "builder insert not inside <section>: " + added,
+  );
+
+  // STABILITY: appending a child to <header> must NOT change <section>'s id.
+  const headerId = idOf(page, "header");
+  const afterHeaderAdd = appendChildByBuilderId(page, headerId, "<X />")!;
+  assert(idOf(afterHeaderAdd, "section") === sectionId, "section id drifted after a sibling add");
+
+  // null id → appends at root.
+  const rooted = appendChildByBuilderId(page, null, "<R />")!;
+  assert(rooted.indexOf("<R />") < rooted.indexOf("</main>"), "null builder id should hit root");
 
   console.log("node-edit self-check OK");
 }

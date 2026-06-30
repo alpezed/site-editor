@@ -24,6 +24,19 @@ export type AnyNode = {
 
 const norm = (s: string) => s.replace(/\s+/g, " ").trim();
 
+/** Layout containers that can take a block-level child. Adding an element
+ *  "inside" is only offered for these tags (leaf/inline/text elements like p,
+ *  a, span, headings, img are excluded). Keep in sync with the same allowlist
+ *  inlined in the iframe agent (editor-agent.ts) — it can't import across the
+ *  iframe boundary. */
+const CONTAINER_TAGS = new Set([
+  "div", "main", "section", "article", "aside", "header", "footer", "nav",
+  "form", "figure", "blockquote", "fieldset", "details", "dialog",
+]);
+export function isContainerTag(tag: string | undefined | null): boolean {
+  return !!tag && CONTAINER_TAGS.has(tag.toLowerCase());
+}
+
 function walk(node: unknown, visit: (n: AnyNode, parent: AnyNode | null) => void, parent: AnyNode | null = null) {
   if (!node || typeof node !== "object") return;
   if (Array.isArray(node)) {
@@ -70,7 +83,7 @@ export function parsesOk(source: string): boolean {
 /**
  * Locate the JSX element that renders `anchor` (its normalized visible text),
  * returning the node plus its parent. Same matcher click-to-edit/element-ops
- * use, extracted so `applySectionAdds` can insert relative to it.
+ * use to locate a node for reorder/duplicate/delete by its rendered text.
  */
 export function locateByAnchor(
   source: string,

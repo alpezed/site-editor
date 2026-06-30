@@ -5,12 +5,12 @@
  * "Edit" toggle via postMessage({ type: "setEditMode", enabled }). While on:
  *
  *  - Hovering any element outlines it; clicking selects it and shows a floating
- *    toolbar (component name, move up/down, duplicate, add below, delete).
- *    Each structural op is reported to the parent:
+ *    toolbar (move up/down, duplicate, delete, and — for container elements only
+ *    — add inside). Each structural op is reported to the parent:
  *      { source:"site-editor", type:"section-op", op, anchor, name }
  *    where `anchor` is the element's visible text (the parent locates the JSX
- *    node by that value — see element-ops.ts). "Add below" sends
- *      { source:"site-editor", type:"add-below" }.
+ *    node by that value — see element-ops.ts). "Add inside" sends
+ *      { source:"site-editor", type:"add-inside" }.
  *  - Double-clicking a text leaf edits it inline; the change is reported as
  *      { source:"site-editor", type:"edit", oldText, newText }
  *    (the parent rewrites the matching literal in source on publish).
@@ -32,7 +32,36 @@ export const EDITOR_AGENT_JS = String.raw`
   var editingText = null;
   var originalText = "";
   var bar = null;
-  var addBelowAnchor = null;
+  var addInsideAnchor = null;
+
+  // Layout containers that can take a block child — the only tags that get the
+  // "Add inside" toolbar action. ponytail: duplicated from isContainerTag in
+  // element-ops.ts; the agent is a stringified script, can't import across the
+  // iframe boundary. Keep the two lists in sync.
+  var CONTAINERS = {
+    div: 1, main: 1, section: 1, article: 1, aside: 1, header: 1, footer: 1,
+    nav: 1, form: 1, figure: 1, blockquote: 1, fieldset: 1, details: 1, dialog: 1,
+  };
+  function isContainer(el) {
+    return !!el && el.nodeType === 1 && CONTAINERS[el.tagName.toLowerCase()] === 1;
+  }
+  // The DOM node an add should drop INTO: the element itself if it's a container,
+  // else its nearest container ancestor (never a non-container leaf). Skips the
+  // agent's own injected wrappers so adds land in real, source-backed containers.
+  function containerNodeFor(el) {
+    var n = el;
+    while (n && n.nodeType === 1) {
+      if (isContainer(n) && !n.hasAttribute("data-site-editor-injected")) return n;
+      n = n.parentElement;
+    }
+    return null;
+  }
+  // Stable builder id of that container — the anchor persistence uses, so a
+  // reload renders the add in the SAME place the live preview showed it.
+  function containerIdFor(el) {
+    var c = containerNodeFor(el);
+    return c ? nearestAttr(c, "data-builder-id") : null;
+  }
 
   window.addEventListener("message", function (e) {
     var d = e.data;
@@ -104,22 +133,20 @@ export const EDITOR_AGENT_JS = String.raw`
   }
 
   // Draw a gallery section into the page immediately, before the source edit is
-  // written + recompiled. If "Add below" set an anchor, insert right after it;
-  // otherwise append to the main content. Real DOM, so it's editable too.
+  // written + recompiled. If "Add inside" set a container anchor, append it as
+  // that container's last child; otherwise append to the main content. Real DOM,
+  // so it's editable too. Matches where it persists in source (insertTag).
   function insertSection(html, key) {
     if (!html) return;
     var wrap = document.createElement("div");
     wrap.setAttribute("data-site-editor-injected", "");
-    if (key) wrap.setAttribute("data-section-key", key);
     wrap.innerHTML = html;
-    // Place after the "Add below" anchor, else after the currently selected
-    // element, else append to main — matching where it persists in source.
-    var anchor = (addBelowAnchor && addBelowAnchor.parentNode)
-      ? addBelowAnchor
-      : (selected && selected.parentNode) ? selected : null;
-    if (anchor) anchor.after(wrap);
+    var container = (addInsideAnchor && addInsideAnchor.isConnected)
+      ? addInsideAnchor
+      : (selected ? containerNodeFor(selected) : null);
+    if (container) container.appendChild(wrap);
     else (document.querySelector("main") || document.body).appendChild(wrap);
-    addBelowAnchor = null;
+    addInsideAnchor = null;
     wrap.scrollIntoView({ behavior: "smooth", block: "center" });
   }
 
@@ -209,6 +236,8 @@ export const EDITOR_AGENT_JS = String.raw`
         source: "site-editor",
         type: "select",
         sxId: el.getAttribute("data-sx-id") || null,
+        builderId: nearestAttr(el, "data-builder-id"),
+        containerBuilderId: containerIdFor(el),
         name: nameOf(el),
         tag: el.tagName.toLowerCase(),
         classes: (el.getAttribute("class") || "").split(/\s+/).filter(Boolean),
@@ -240,24 +269,36 @@ export const EDITOR_AGENT_JS = String.raw`
   function anchorOf(el) {
     return el.textContent.replace(/\s+/g, " ").trim().slice(0, 400);
   }
+  // Nearest stamped id (self or ancestor) for the given attribute. The clicked
+  // container is usually stamped itself, but if it isn't (stamp not yet applied,
+  // or a node a component renders without forwarding the attr) we resolve to the
+  // closest stamped ancestor — so "Add inside" never falls back to the page root.
+  function nearestAttr(el, attr) {
+    var n = el;
+    while (n && n.getAttribute) {
+      var id = n.getAttribute(attr);
+      if (id) return id;
+      n = n.parentElement;
+    }
+    return null;
+  }
 
   function sendOp(kind) {
     if (!selected) return;
     var wrap = selected.closest && selected.closest("[data-section-key]");
     var isWholeSection = wrap && (selected === wrap || selected === wrap.firstElementChild);
 
-    if (kind === "add-below") {
-      // Drop the new section right after the clicked element — both in the live
-      // DOM (addBelowAnchor) and in source (anchor = the element's visible text,
-      // which the parent locates the JSX node by on sync/save). afterKey still
-      // orders staged sections among themselves.
-      addBelowAnchor = selected;
+    if (kind === "add-inside") {
+      // Nest the new element inside the clicked container. The parent inserts it
+      // by the container's data-sx-id (deterministic source loc) on the server —
+      // no text anchors. addInsideAnchor drives the instant live-DOM preview.
+      if (!isContainer(selected)) return;
+      addInsideAnchor = selected;
       parent.postMessage(
         {
           source: "site-editor",
-          type: "add-below",
-          afterKey: wrap ? wrap.getAttribute("data-section-key") : null,
-          anchor: anchorOf(selected),
+          type: "add-inside",
+          builderId: containerIdFor(selected),
         },
         "*",
       );
@@ -350,18 +391,15 @@ export const EDITOR_AGENT_JS = String.raw`
     bar = document.createElement("div");
     bar.setAttribute("data-site-editor-ignore", "");
     bar.style.cssText =
-      "position:fixed;z-index:2147483647;display:flex;gap:6px;align-items:center;padding:4px;border-radius:8px;background:rgba(9,9,11,0.92);box-shadow:0 4px 16px rgba(0,0,0,0.4);";
-
-    var label = document.createElement("span");
-    label.textContent = nameOf(selected);
-    label.style.cssText =
-      "background:#ea580c;color:#fff;border-radius:6px;padding:5px 9px;font:600 12px system-ui,sans-serif;line-height:1;max-width:200px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;";
-    bar.appendChild(label);
+      "position:fixed;z-index:2147483647;display:flex;gap:4px;align-items:center;padding:4px;border-radius:8px;background:rgba(9,9,11,0.92);box-shadow:0 4px 16px rgba(0,0,0,0.4);";
 
     bar.appendChild(mkBtn("Move up", icon('<path d="M12 19V5"/><path d="M5 12l7-7 7 7"/>'), function () { sendOp("move-up"); }));
     bar.appendChild(mkBtn("Move down", icon('<path d="M12 5v14"/><path d="M19 12l-7 7-7-7"/>'), function () { sendOp("move-down"); }));
     bar.appendChild(mkBtn("Duplicate", icon('<rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/>'), function () { sendOp("duplicate"); }));
-    bar.appendChild(mkBtn("Add below", icon('<path d="M12 5v14"/><path d="M5 12h14"/>'), function () { sendOp("add-below"); }));
+    // Add inside: only for container elements (a leaf like <p>/<a> can't hold a child).
+    if (isContainer(selected)) {
+      bar.appendChild(mkBtn("Add inside", icon('<path d="M12 5v14"/><path d="M5 12h14"/>'), function () { sendOp("add-inside"); }));
+    }
     bar.appendChild(mkBtn("Delete", icon('<path d="M3 6h18"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/>'), function () { sendOp("delete"); }, { fg: "#f87171" }));
 
     document.body.appendChild(bar);

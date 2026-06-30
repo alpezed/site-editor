@@ -7,7 +7,16 @@ const stateSchema = z.object({
   pending: z.record(z.string(), z.record(z.string(), z.string())),
   textEdits: z.record(z.string(), z.string()).optional(),
   sections: z
-    .array(z.union([z.string(), z.object({ key: z.string(), id: z.string() })]))
+    .array(
+      z.union([
+        z.string(),
+        z.object({
+          key: z.string(),
+          id: z.string(),
+          builderId: z.string().nullish(),
+        }),
+      ]),
+    )
     .optional(),
   fileOverrides: z.record(z.string(), z.string()).optional(),
   activeRoute: z.string().nullish(),

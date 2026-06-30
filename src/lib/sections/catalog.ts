@@ -1,8 +1,9 @@
 /**
  * Static catalog of pre-built sections shown in the editor's Explore →
- * Section Gallery. "Add to Site" stages a section in the editor's pending state;
- * on sync/save its `code` is written as a component file and a `<ImportName/>`
- * tag is appended to the site's home route (see applySectionAdds in ast.ts).
+ * Section Gallery. "Add to Site" writes the section's `code` as a per-instance
+ * component file and inserts a bare `<ImportName/>` as the last child of the
+ * clicked container — located by its stable data-builder-id, no text anchors
+ * (see applySections in editor/sections.ts + appendChildByBuilderId).
  *
  * ponytail: each section's `code` is a self-contained default-export component
  * using inline styles only — no Tailwind/shadcn/icon deps — so it renders in any

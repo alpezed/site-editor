@@ -1,8 +1,8 @@
 import { prisma } from "@/lib/prisma";
 import { getSandboxDriver } from "@/lib/sandbox";
 import { octokitForConnection } from "@/lib/github/app";
-import { applyFieldEdits, applySectionAdds, applyTextEdits } from "@/lib/editor/ast";
-import { planSectionsForHome } from "@/lib/editor/sections";
+import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
+import { applySections } from "@/lib/editor/sections";
 import { stampSource, stripSxIds, parseSxId } from "@/lib/editor/stamp";
 import { applyNodeEdit, type Patch } from "@/lib/editor/node-edit";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
@@ -119,14 +119,14 @@ export async function syncPreview(siteId: string, userId: string) {
 
   const state = (session.state as unknown as EditorState) ?? { pending: {} };
   const pending = state.pending ?? {};
-  const sections = normalizeSections(state.sections);
   const overrides = state.fileOverrides ?? {};
   const textEdits = state.textEdits ?? {};
+  const sections = normalizeSections(state.sections);
   if (
     Object.keys(pending).length === 0 &&
-    sections.length === 0 &&
     Object.keys(overrides).length === 0 &&
-    Object.keys(textEdits).length === 0
+    Object.keys(textEdits).length === 0 &&
+    sections.length === 0
   ) {
     return { written: 0 };
   }
@@ -155,20 +155,6 @@ export async function syncPreview(siteId: string, userId: string) {
     edited.set(filePath, applyFieldEdits(current, edits));
   }
 
-  // Sections: write each instance's component file now. The home-page tags are
-  // appended LAST (after overrides) so a stale page.tsx override can't wipe them.
-  const sectionPlan =
-    sections.length > 0
-      ? await planSectionsForHome(
-          site.repository.metadata as unknown as ProjectMetadata | null,
-          sections,
-          load,
-        )
-      : null;
-  if (sectionPlan) {
-    for (const f of sectionPlan.files) edited.set(f.path, f.content);
-  }
-
   // Click-to-edit text edits: matched by value across the repo's code files so
   // a reload renders them from source (they otherwise live only in the iframe's
   // contentEditable DOM and revert on reload). Applied on top of field edits.
@@ -188,20 +174,21 @@ export async function syncPreview(siteId: string, userId: string) {
     }
   }
 
-  // Whole-file overrides from in-preview element ops win per file.
+  // Whole-file overrides win per file (in-preview inspector/structural ops).
   for (const [p, content] of Object.entries(overrides)) edited.set(p, content);
 
-  // Append section tags to the home page LAST — on top of any override — so the
-  // staged sections are authoritative and never clobbered. Idempotent per
-  // instance, so this never duplicates if the override already carried them.
-  if (sectionPlan) {
-    const base = edited.get(sectionPlan.homePath) ?? sectionPlan.homeSource;
-    edited.set(sectionPlan.homePath, applySectionAdds(base, sectionPlan.additions));
-  }
+  // Added elements: insert each by its stable builder id + write its component
+  // file. Applied LAST so it lands on top of overrides and is never clobbered.
+  await applySections(
+    sections,
+    edited,
+    load,
+    site.repository.metadata as unknown as ProjectMetadata | null,
+  );
 
   const files: { path: string; content: string }[] = [];
-  for (const [path, content] of edited) {
-    if (content !== fetched.get(path)) files.push({ path, content });
+  for (const [p, content] of edited) {
+    if (content !== fetched.get(p)) files.push({ path: p, content });
   }
 
   if (files.length > 0) {

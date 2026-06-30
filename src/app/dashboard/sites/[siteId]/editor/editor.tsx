@@ -103,11 +103,9 @@ export function Editor(props: Props) {
   textEditsRef.current = textEdits;
   sectionsRef.current = sections;
   overridesRef.current = fileOverrides;
-  // When "Add below" was used, the next added section is inserted right after
-  // this instance key in the staged list (else appended), and anchored in source
-  // to the clicked element's visible text so it persists where it was dropped.
-  const addBelowAfterKey = useRef<string | null>(null);
-  const addBelowAnchor = useRef<string | null>(null);
+  // Stable builder id of the container "Add inside" was clicked on, captured when
+  // the agent opens the gallery; the next gallery pick inserts inside that element.
+  const addInsideBuilderId = useRef<string | null>(null);
 
   const body = useCallback(
     () => ({
@@ -148,6 +146,26 @@ export function Editor(props: Props) {
       "*",
     );
   }, []);
+
+  // Persist + sync now (no debounce), then reload the iframe so the canonical
+  // source render replaces the agent's instantly-injected DOM node — otherwise a
+  // structural change shows the injected node AND the source node until reload.
+  const syncAndReload = useCallback(async () => {
+    if (saveTimer.current) clearTimeout(saveTimer.current);
+    try {
+      await fetch(`/api/sites/${props.siteId}/editor`, {
+        method: "PUT",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify(body()),
+      });
+      if (previewUrl) {
+        await fetch(`/api/sites/${props.siteId}/preview/sync`, { method: "POST" });
+        setIframeNonce((n) => n + 1);
+      }
+    } catch {
+      /* the optimistic in-iframe insert stays; next autosave retries */
+    }
+  }, [props.siteId, previewUrl, body]);
 
   // ── Undo/redo: record the pre-change snapshot whenever edit-state changes,
   //    skipping changes we apply ourselves during time travel.
@@ -266,6 +284,8 @@ export function Editor(props: Props) {
       if (d.type === "select") {
         setSelection({
           sxId: d.sxId,
+          builderId: d.builderId,
+          containerBuilderId: d.containerBuilderId,
           name: d.name,
           tag: d.tag,
           classes: d.classes ?? [],
@@ -281,9 +301,8 @@ export function Editor(props: Props) {
         setTree(d.nodes ?? []);
         return;
       }
-      if (d.type === "add-below") {
-        addBelowAfterKey.current = d.afterKey ?? null;
-        addBelowAnchor.current = d.anchor ?? null;
+      if (d.type === "add-inside") {
+        addInsideBuilderId.current = d.builderId ?? null;
         setMode("explore");
         return;
       }
@@ -351,36 +370,36 @@ export function Editor(props: Props) {
     }
   }
 
+  // Add a gallery element. The placement is recorded as a SectionInstance keyed
+  // by the clicked container's STABLE builder id (or null = page root). It's held
+  // in zustand and applied to the sandbox files on sync/save by that id — which
+  // survives reload, so the element stays exactly where it was dropped. No
+  // per-add server round-trip; the live preview shows it instantly via the agent.
   function addSection(id: string) {
     const key = crypto.randomUUID();
-    const next = [...sectionsRef.current];
-    // Insert after the "Add below" anchor instance, else append. The clicked
-    // element's text anchors the source splice so it persists in place — falling
-    // back to the current selection so a left-panel add also lands where you are.
-    const afterKey = addBelowAfterKey.current;
-    const afterAnchor =
-      addBelowAnchor.current ?? useEditorStore.getState().selection?.anchor ?? null;
-    addBelowAfterKey.current = null;
-    addBelowAnchor.current = null;
-    const inst: SectionInstance = afterAnchor ? { key, id, afterAnchor } : { key, id };
-    const at = afterKey ? next.findIndex((s) => s.key === afterKey) : -1;
-    if (at >= 0) next.splice(at + 1, 0, inst);
-    else next.push(inst);
+    const sel = useEditorStore.getState().selection;
+    // Drop into the container "Add inside" targeted, else the nearest container
+    // of the current selection (works even when a leaf is selected). null only
+    // when nothing is selected → page root. Same anchor the agent's instant
+    // insert uses, so the reload renders it in the SAME place.
+    const builderId =
+      addInsideBuilderId.current ?? sel?.containerBuilderId ?? null;
+    addInsideBuilderId.current = null;
+
+    const next = [...sectionsRef.current, { key, id, builderId: builderId ?? undefined }];
     setSections(next);
     sectionsRef.current = next;
     setMode("build");
-    // Instant: draw it straight into the live preview — no API round-trip, no
-    // remount, no compile wait. The iframe stays mounted (the gallery is an
-    // overlay), so the injected node survives the mode switch. The key tags the
-    // wrapper so this exact placement can be edited/removed later.
+    // Instant feedback: draw it into the live preview before the sandbox sync
+    // hot-reloads the real source.
     iframeRef.current?.contentWindow?.postMessage(
       { source: "site-editor", type: "insertSection", html: getSection(id)?.previewHtml ?? "", key },
       "*",
     );
-    setStatus(previewUrl ? "Section added" : "Section staged — start the live preview to see it");
-    // Persist + sync the real component file in the background (for reload/
-    // publish). Failures don't affect what the user already sees.
-    persist(true);
+    setStatus(previewUrl ? "Element added" : "Element staged — start the live preview to see it");
+    // Persist + sync + reload so the canonical source placement (by builder id)
+    // replaces the injected node — what you see after reload is what's saved.
+    void syncAndReload();
   }
 
   // Remove a whole staged-section instance by key (the agent reports this when
