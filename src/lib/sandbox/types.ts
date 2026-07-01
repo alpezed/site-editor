@@ -3,12 +3,18 @@ export interface Sandbox {
   previewUrl: string;
 }
 
+export interface SandboxStatus {
+  stage: string;
+  message: string;
+}
+
 export interface SandboxDriver {
   /** Create a sandbox from a git repo + branch and start the dev server. */
   create(opts: {
     repoFullName: string;
     branch: string;
     accessToken: string;
+    onStatus?: (status: SandboxStatus) => void | Promise<void>;
   }): Promise<Sandbox>;
   /** Write changed files into a running sandbox (triggers hot reload). */
   writeFiles(

@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { getSandboxDriver } from "@/lib/sandbox";
+import type { SandboxStatus } from "@/lib/sandbox/types";
 import { octokitForConnection } from "@/lib/github/app";
 import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
 import { applySections } from "@/lib/editor/sections";
@@ -31,13 +32,21 @@ async function latestSession(siteId: string) {
 }
 
 /** Start (or restart) the preview sandbox for a site, returning the URL. */
-export async function startPreview(siteId: string, userId: string) {
+export async function startPreview(
+  siteId: string,
+  userId: string,
+  onStatus?: (status: SandboxStatus) => void | Promise<void>,
+) {
   const site = await loadSite(siteId, userId);
   if (!site?.repository) throw new Error("No repository connected");
 
   const connection = site.repository.githubConnection;
   const branch = site.repository.branch || site.repository.defaultBranch;
 
+  await onStatus?.({
+    stage: "github-auth",
+    message: "Preparing GitHub repository access",
+  });
   // Ensure the cached access token is fresh before handing it to the sandbox.
   await octokitForConnection(connection);
   const fresh = await prisma.githubConnection.findUniqueOrThrow({
@@ -49,6 +58,7 @@ export async function startPreview(siteId: string, userId: string) {
     repoFullName: site.repository.repositoryName,
     branch,
     accessToken: fresh.accessToken,
+    onStatus,
   });
 
   const existing = await latestSession(siteId);
@@ -73,6 +83,10 @@ export async function startPreview(siteId: string, userId: string) {
   // data-sx-id. Files are already cloned into the sandbox — read locally, stamp,
   // write back. Best-effort: a failure just disables precise selection.
   const [owner, repoName] = site.repository.repositoryName.split("/");
+  await onStatus?.({
+    stage: "stamp",
+    message: "Preparing editable page markers",
+  });
   void stampProject(sandbox.id, connection, owner, repoName, branch);
 
   return sandbox;

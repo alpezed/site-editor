@@ -14,8 +14,10 @@ import { e2bDriver } from "@/lib/sandbox/e2b";
 export type { Sandbox, SandboxDriver };
 
 const mockDriver: SandboxDriver = {
-  async create({ repoFullName }): Promise<Sandbox> {
+  async create({ repoFullName, onStatus }): Promise<Sandbox> {
+    await onStatus?.({ stage: "mock-create", message: "Creating preview sandbox" });
     const id = `mock-${repoFullName.replace(/\W+/g, "-")}`;
+    await onStatus?.({ stage: "mock-ready", message: "Preview sandbox ready" });
     return { id, previewUrl: `${env.appUrl}/preview/mock` };
   },
   async writeFiles() {

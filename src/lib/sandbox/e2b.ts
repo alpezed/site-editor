@@ -4,6 +4,7 @@ import { EDITOR_AGENT_JS } from '@/lib/sandbox/editor-agent';
 import type {
 	Sandbox as SandboxInfo,
 	SandboxDriver,
+	SandboxStatus,
 } from '@/lib/sandbox/types';
 
 /**
@@ -81,9 +82,15 @@ async function run(
 }
 
 export const e2bDriver: SandboxDriver = {
-	async create({ repoFullName, branch, accessToken }): Promise<SandboxInfo> {
+	async create({
+		repoFullName,
+		branch,
+		accessToken,
+		onStatus,
+	}): Promise<SandboxInfo> {
 		const apiKey = env.sandbox.e2bApiKey();
 		// const tpl = template();
+		const emit = (status: SandboxStatus) => onStatus?.(status);
 
 		const templateId = process.env.E2B_TEMPLATE_ID;
 		if (!templateId || templateId.trim() === '') {
@@ -97,9 +104,17 @@ export const e2bDriver: SandboxDriver = {
 			);
 		}
 
+		await emit({
+			stage: 'sandbox-create',
+			message: 'Creating E2B sandbox',
+		});
 		const sbx = await Sandbox.create(templateId, {
 			apiKey,
 			timeoutMs: TIMEOUT_MS,
+		});
+		await emit({
+			stage: 'sandbox-created',
+			message: 'E2B sandbox created',
 		});
 
 		// 1) Clone. The token is embedded in the URL only for this one command.
@@ -113,6 +128,10 @@ export const e2bDriver: SandboxDriver = {
 		// Run from /home/user, not APP_DIR: the template's WORKDIR may be APP_DIR,
 		// and `rm -rf` on the shell's own cwd makes git's getcwd() fail with
 		// "Unable to read current working directory".
+		await emit({
+			stage: 'clone',
+			message: `Cloning ${repoFullName}`,
+		});
 		await run(
 			sbx,
 			'git clone',
@@ -121,8 +140,16 @@ export const e2bDriver: SandboxDriver = {
 				`git clone --depth 1 ${cloneUrl} ${APP_DIR})`,
 			{ timeoutMs: INSTALL_TIMEOUT_MS }
 		);
+		await emit({
+			stage: 'cloned',
+			message: 'Repository cloned',
+		});
 
 		// 2) Install dependencies, honouring the lockfile.
+		await emit({
+			stage: 'install',
+			message: 'Installing dependencies',
+		});
 		await run(
 			sbx,
 			'install',
@@ -132,9 +159,17 @@ export const e2bDriver: SandboxDriver = {
        else npm install; fi`,
 			{ timeoutMs: INSTALL_TIMEOUT_MS, envs: { NEXT_TELEMETRY_DISABLED: '1' } }
 		);
+		await emit({
+			stage: 'installed',
+			message: 'Dependencies installed',
+		});
 
 		// 2b) Inject the click-to-edit agent: serve it from public/ and add a
 		// <script> to the app's layout. Sandbox-only — never committed.
+		await emit({
+			stage: 'agent',
+			message: 'Preparing visual editor controls',
+		});
 		await injectAgent(sbx);
 
 		// 3) Start the dev server in the background, logging to a file.
@@ -142,6 +177,10 @@ export const e2bDriver: SandboxDriver = {
 		// files written via the E2B filesystem API don't fire inotify in the sandbox
 		// overlay, so without polling Next never invalidates its compiled routes and
 		// keeps serving stale pages even after writeFiles + a full reload.
+		await emit({
+			stage: 'dev-server',
+			message: 'Starting Next.js dev server',
+		});
 		await sbx.commands.run(
 			`cd ${APP_DIR} && nohup npx --yes next dev -H 0.0.0.0 -p ${DEV_PORT} > ${LOG_FILE} 2>&1 &`,
 			{
@@ -156,6 +195,10 @@ export const e2bDriver: SandboxDriver = {
 
 		// 4) Public preview URL.
 		const host = sbx.getHost(DEV_PORT);
+		await emit({
+			stage: 'ready',
+			message: 'Live preview ready',
+		});
 		return { id: sbx.sandboxId, previewUrl: `https://${host}` };
 	},
 

@@ -67,6 +67,7 @@ export function Editor(props: Props) {
 	const [status, setStatus] = useState<string | null>(null);
 	const [previewUrl, setPreviewUrl] = useState<string | null>(props.previewUrl);
 	const [startingPreview, setStartingPreview] = useState(false);
+	const [previewStatus, setPreviewStatus] = useState<string | null>(null);
 	// True while the iframe is reloading after a structural change — masks the
 	// dev-server's blank-compile frame with an overlay instead of a white flash.
 	const [reloading, setReloading] = useState(false);
@@ -79,6 +80,7 @@ export function Editor(props: Props) {
 	const [historyOpen, setHistoryOpen] = useState(false);
 
 	const iframeRef = useRef<HTMLIFrameElement | null>(null);
+	const previewStartRequested = useRef(false);
 
 	// Shared editor state (selection / layers tree / undo history).
 	const selection = useEditorStore(s => s.selection);
@@ -367,27 +369,72 @@ export function Editor(props: Props) {
 		return () => clearTimeout(t);
 	}, [reloading, iframeNonce]);
 
-	async function startPreview() {
+	const startPreview = useCallback(async () => {
+		if (startingPreview || previewUrl || !props.imported) return;
+		previewStartRequested.current = true;
 		setStartingPreview(true);
 		setStatus(null);
+		setPreviewStatus('Creating live preview');
 		try {
 			const res = await fetch(`/api/sites/${props.siteId}/preview`, {
 				method: 'POST',
+				headers: { accept: 'application/x-ndjson' },
 			});
-			const data = await res.json();
-			if (!res.ok) throw new Error(data.error ?? 'Failed to start preview');
-			setPreviewUrl(data.previewUrl);
+			if (!res.ok) {
+				const data = await res.json().catch(() => null);
+				throw new Error(data?.error ?? 'Failed to start preview');
+			}
+
+			let nextPreviewUrl: string | null = null;
+			if (res.body) {
+				const reader = res.body.getReader();
+				const decoder = new TextDecoder();
+				let buffer = '';
+				while (true) {
+					const { done, value } = await reader.read();
+					buffer += decoder.decode(value, { stream: !done });
+					const lines = buffer.split('\n');
+					buffer = lines.pop() ?? '';
+					for (const line of lines) {
+						if (!line.trim()) continue;
+						const event = JSON.parse(line) as {
+							message?: string;
+							previewUrl?: string;
+							error?: boolean;
+						};
+						if (event.message) setPreviewStatus(event.message);
+						if (event.previewUrl) {
+							nextPreviewUrl = event.previewUrl;
+							setPreviewUrl(event.previewUrl);
+						}
+						if (event.error) throw new Error(event.message ?? 'Preview failed');
+					}
+					if (done) break;
+				}
+			} else {
+				const data = await res.json();
+				nextPreviewUrl = data.previewUrl;
+				setPreviewUrl(data.previewUrl);
+			}
+			if (!nextPreviewUrl) throw new Error('Preview did not return a URL');
 			// A fresh sandbox is a clean clone of the repo — reapply any staged edits
 			// so they survive a reload that had to restart an expired preview.
 			fetch(`/api/sites/${props.siteId}/preview/sync`, {
 				method: 'POST',
 			}).catch(() => {});
+			setPreviewStatus(null);
 		} catch (err) {
 			setStatus(err instanceof Error ? err.message : 'Error');
+			setPreviewStatus('Preview failed');
 		} finally {
 			setStartingPreview(false);
 		}
-	}
+	}, [previewUrl, props.imported, props.siteId, startingPreview]);
+
+	useEffect(() => {
+		if (previewUrl || !props.imported || previewStartRequested.current) return;
+		void startPreview();
+	}, [previewUrl, props.imported, startPreview]);
 
 	// Add a gallery element. The placement is recorded as a SectionInstance keyed
 	// by the clicked container's STABLE builder id (or null = page root). It's held
@@ -675,27 +722,31 @@ export function Editor(props: Props) {
 										</div>
 									)}
 								</div>
-							) : (
-								<div className='flex h-full items-center justify-center p-8 text-center text-sm text-zinc-400'>
-									<div className='space-y-3'>
-										<p className='font-medium text-zinc-200'>
-											Live preview not running
-										</p>
-										<p className='max-w-md'>
-											Spin up an isolated E2B sandbox that clones your repo,
-											installs deps and runs the dev server. Then hit Edit to
-											tweak any text inline.
-										</p>
-										<Button
-											onClick={startPreview}
-											disabled={startingPreview || !props.imported}
-										>
-											{startingPreview
-												? 'Starting sandbox…'
-												: 'Start live preview'}
-										</Button>
+								) : (
+									<div className='flex h-full items-center justify-center p-8 text-center text-sm text-zinc-400'>
+										<div className='space-y-3'>
+											<p className='font-medium text-zinc-200'>
+												{startingPreview
+													? (previewStatus ?? 'Starting live preview')
+													: 'Live preview not running'}
+											</p>
+											<p className='max-w-md'>
+												{startingPreview
+													? 'Preparing the E2B sandbox, cloning the repository, installing dependencies, and starting the dev server.'
+													: props.imported
+														? 'The preview did not start automatically. Retry the E2B startup process.'
+														: 'Import this project from settings before the live preview can start.'}
+											</p>
+											<Button
+												onClick={startPreview}
+												disabled={startingPreview || !props.imported}
+											>
+												{startingPreview
+													? 'Starting preview…'
+													: 'Retry live preview'}
+											</Button>
+										</div>
 									</div>
-								</div>
 							)}
 
 							{/* Floating Edit toggle */}
