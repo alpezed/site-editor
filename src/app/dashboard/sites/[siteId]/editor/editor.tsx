@@ -329,8 +329,7 @@ export function Editor(props: Props) {
 				return;
 			}
 			if (d.type === 'section-op') {
-				console.log({ d });
-				applyElementOp(d.op, d.anchor);
+				applyElementOp(d.op, d.anchor, d.sxId ?? null);
 				return;
 			}
 			if (d.type !== 'edit') return;
@@ -520,20 +519,29 @@ export function Editor(props: Props) {
 	// mutated the live DOM for instant feedback; here we persist in the background
 	// — rewrite source, store the override locally (so autosave won't clobber it
 	// and Push ships it). No reload; Fast Refresh reconciles the canonical render.
-	async function applyElementOp(op: string, anchor: string) {
+	async function applyElementOp(op: string, anchor: string, sxId: string | null) {
 		try {
 			const res = await fetch(`/api/sites/${props.siteId}/section-op`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ op, anchor }),
+				body: JSON.stringify({ op, anchor, sxId }),
 			});
 			const data = await res.json();
 			if (!res.ok) throw new Error(data.error ?? 'Op failed');
-			setFileOverrides(prev => {
-				const next = { ...prev, [data.file]: data.content };
-				overridesRef.current = next;
-				return next;
-			});
+			// Deleting a whole staged-section instance: drop it from the list too,
+			// else the next sync re-inserts it from the sections array.
+			if (data.removedSectionKey) {
+				const next = sectionsRef.current.filter(s => s.key !== data.removedSectionKey);
+				sectionsRef.current = next;
+				setSections(next);
+			}
+			if (data.file) {
+				setFileOverrides(prev => {
+					const next = { ...prev, [data.file]: data.content };
+					overridesRef.current = next;
+					return next;
+				});
+			}
 		} catch {
 			setStatus("Couldn't save this change");
 		}

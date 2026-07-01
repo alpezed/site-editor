@@ -140,6 +140,7 @@ export const EDITOR_AGENT_JS = String.raw`
     if (!html) return;
     var wrap = document.createElement("div");
     wrap.setAttribute("data-site-editor-injected", "");
+    wrap.setAttribute("data-section-key", key);
     wrap.innerHTML = html;
     var container = (addInsideAnchor && addInsideAnchor.isConnected)
       ? addInsideAnchor
@@ -356,7 +357,17 @@ export const EDITOR_AGENT_JS = String.raw`
     }
     clearSelection();
     parent.postMessage(
-      { source: "site-editor", type: "section-op", op: kind, anchor: anchor, name: name },
+      {
+        source: "site-editor",
+        type: "section-op",
+        op: kind,
+        anchor: anchor,
+        name: name,
+        // Stable source loc — the parent locates the JSX node by this (works for
+        // text-less elements like img that text anchors can't pin). Falls back to
+        // the text anchor server-side when absent (unstamped instant-preview node).
+        sxId: el.getAttribute("data-sx-id") || null,
+      },
       "*"
     );
   }

@@ -167,6 +167,30 @@ export function applyElementOp(
   return swapRanges(source, swapWith, node);
 }
 
+/** Remove the first JSX usage of a component (by tag name) plus its import line.
+ *  Deleting a whole section-instance can't be located in its own component file
+ *  (that's where the click's data-sx-id points) — so we strip the `<Import />`
+ *  tag and its `import` from the file that renders it. null if not found. */
+export function removeComponentUsage(source: string, tagName: string): string | null {
+  const ast = parseSafe(source);
+  if (!ast) return null;
+  let hit: AnyNode | null = null;
+  walk(ast.program, (n) => {
+    if (hit || n.type !== "JSXElement") return;
+    const open = (n as Record<string, unknown>).openingElement as AnyNode | undefined;
+    const name = open?.name as AnyNode | undefined;
+    if (name?.type === "JSXIdentifier" && (name as Record<string, unknown>).name === tagName) {
+      hit = n;
+    }
+  });
+  if (!hit) return null;
+  const out = spliceOut(source, hit);
+  return out.replace(
+    new RegExp(`^[ \\t]*import\\s+${tagName}\\s+from\\s+["'][^"']*["'];?[ \\t]*\\r?\\n?`, "m"),
+    "",
+  );
+}
+
 /** Direct JSX-element children of a JSXElement/JSXFragment, in source order. */
 export function jsxChildren(parent: AnyNode | null): AnyNode[] {
   if (!parent) return [];
@@ -242,6 +266,19 @@ export function __elementOpDemo(): void {
   console.assert(delDyn != null, "dynamic-anchor delete not located");
   console.assert(!delDyn.includes("Hello "), "dynamic delete removed wrong node");
   console.assert(delDyn.includes("Keep me"), "dynamic delete clobbered sibling");
+
+  // removeComponentUsage: strip a section-instance tag + its import.
+  const withSection = [
+    `import Section_k1 from "../components/site-editor-sections/k1";`,
+    `export default function Home() {`,
+    `  return (<main><h1>Keep</h1><div><Section_k1 /></div></main>);`,
+    `}`,
+  ].join("\n");
+  const removed = removeComponentUsage(withSection, "Section_k1")!;
+  console.assert(removed != null, "removeComponentUsage not located");
+  console.assert(!removed.includes("Section_k1"), "tag or import left behind");
+  console.assert(removed.includes("Keep"), "removeComponentUsage clobbered siblings");
+  console.assert(removeComponentUsage(withSection, "Nope") === null, "missing tag should be null");
 
   console.log("element-ops self-check OK\n--- move-up ---\n" + up);
 }

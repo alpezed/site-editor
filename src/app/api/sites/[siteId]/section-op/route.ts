@@ -3,17 +3,28 @@ import { z } from "zod";
 import { getCurrentUser } from "@/lib/auth";
 import { prisma } from "@/lib/prisma";
 import { getFileContent, getTree } from "@/lib/github/app";
-import { applyElementOp } from "@/lib/editor/element-ops";
+import { applyElementOp, removeComponentUsage } from "@/lib/editor/element-ops";
+import { applyNodeEdit } from "@/lib/editor/node-edit";
+import { parseSxId } from "@/lib/editor/stamp";
 import { homeRouteFile } from "@/lib/editor/sections";
-import { normalizeSections, sectionInstancePath } from "@/lib/editor/types";
+import {
+  normalizeSections,
+  sectionInstancePath,
+  sectionImportName,
+} from "@/lib/editor/types";
 import { getSandboxDriver } from "@/lib/sandbox";
 import type { EditorState } from "@/lib/editor/types";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 
-const schema = z.object({
-  op: z.enum(["move-up", "move-down", "duplicate", "delete"]),
-  anchor: z.string().min(1),
-});
+const schema = z
+  .object({
+    op: z.enum(["move-up", "move-down", "duplicate", "delete"]),
+    anchor: z.string().optional(),
+    // Stable source loc of the selected element (data-sx-id). Preferred over the
+    // text anchor: it pins text-less elements (<img>) and disambiguates dupes.
+    sxId: z.string().optional(),
+  })
+  .refine((d) => d.sxId || d.anchor, "need sxId or anchor");
 
 /**
  * Apply an in-preview element op (reorder/duplicate/delete) to source. Finds the
@@ -32,7 +43,7 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid" }, { status: 400 });
   }
-  const { op, anchor } = parsed.data;
+  const { op, anchor, sxId } = parsed.data;
 
   const site = await prisma.site.findFirst({
     where: { id: siteId, ownerId: user.id },
@@ -86,14 +97,57 @@ export async function POST(
 
   let hitPath: string | null = null;
   let next: string | null = null;
-  for (const p of candidates.slice(0, 200)) {
-    const current = await effective(p);
-    if (current == null || !current.includes(anchor.trim().split(/\s+/)[0])) continue;
-    const result = applyElementOp(current, anchor, op);
-    if (result != null && result !== current) {
-      hitPath = p;
-      next = result;
-      break;
+  let removedSectionKey: string | undefined;
+
+  // Preferred: locate by the stable source loc (data-sx-id).
+  const loc = sxId ? parseSxId(sxId) : null;
+  if (loc) {
+    // A click inside a section instance carries the instance's own component-file
+    // loc (site-editor-sections/<key>.tsx) — the key is the file name. Deleting
+    // it means stripping the <Section_key/> tag + import from the file that
+    // renders it, not editing the (self-contained) component file.
+    const key = /site-editor-sections\/([^/]+)\.tsx$/.exec(loc.filePath)?.[1];
+    if (op === "delete" && key) {
+      const importName = sectionImportName(key);
+      for (const p of candidates.slice(0, 200)) {
+        const current = await effective(p);
+        if (current == null || !current.includes(importName)) continue;
+        const result = removeComponentUsage(current, importName);
+        if (result != null && result !== current) {
+          hitPath = p;
+          next = result;
+          // Staged instance: tell the client to drop it so sync won't re-add it.
+          if (sections.some((s) => s.key === key)) removedSectionKey = key;
+          break;
+        }
+      }
+    } else if (!key) {
+      const current = await effective(loc.filePath);
+      if (current != null) {
+        const result = applyNodeEdit(
+          current,
+          { line: loc.line, column: loc.column },
+          { kind: "op", op },
+        );
+        if (result != null && result !== current) {
+          hitPath = loc.filePath;
+          next = result;
+        }
+      }
+    }
+  }
+
+  // Fallback: text-anchor locator (unstamped instant-preview nodes).
+  if ((!hitPath || next == null) && anchor) {
+    for (const p of candidates.slice(0, 200)) {
+      const current = await effective(p);
+      if (current == null || !current.includes(anchor.trim().split(/\s+/)[0])) continue;
+      const result = applyElementOp(current, anchor, op);
+      if (result != null && result !== current) {
+        hitPath = p;
+        next = result;
+        break;
+      }
     }
   }
 
@@ -105,10 +159,19 @@ export async function POST(
   }
 
   const nextOverrides = { ...overrides, [hitPath]: next };
+  const nextSections = removedSectionKey
+    ? sections.filter((s) => s.key !== removedSectionKey)
+    : state.sections;
   if (session) {
     await prisma.editorSession.update({
       where: { id: session.id },
-      data: { state: { ...state, fileOverrides: nextOverrides } as object },
+      data: {
+        state: {
+          ...state,
+          fileOverrides: nextOverrides,
+          sections: nextSections,
+        } as object,
+      },
     });
   }
 
@@ -124,5 +187,5 @@ export async function POST(
     }
   }
 
-  return NextResponse.json({ ok: true, file: hitPath, content: next });
+  return NextResponse.json({ ok: true, file: hitPath, content: next, removedSectionKey });
 }
