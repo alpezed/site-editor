@@ -7,11 +7,7 @@ import { applyElementOp, removeComponentUsage } from "@/lib/editor/element-ops";
 import { applyNodeEdit } from "@/lib/editor/node-edit";
 import { parseSxId } from "@/lib/editor/stamp";
 import { homeRouteFile } from "@/lib/editor/sections";
-import {
-  normalizeSections,
-  sectionInstancePath,
-  sectionImportName,
-} from "@/lib/editor/types";
+import { normalizeSections, sectionInstancePath } from "@/lib/editor/types";
 import { getSandboxDriver } from "@/lib/sandbox";
 import type { EditorState } from "@/lib/editor/types";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
@@ -19,10 +15,12 @@ import type { ProjectMetadata } from "@/lib/import/component-scanner";
 const schema = z
   .object({
     op: z.enum(["move-up", "move-down", "duplicate", "delete"]),
-    anchor: z.string().optional(),
+    // nullish: the agent sends `sxId: null` for unstamped nodes and may send an
+    // empty anchor — accept both, then require at least one usable value.
+    anchor: z.string().nullish(),
     // Stable source loc of the selected element (data-sx-id). Preferred over the
     // text anchor: it pins text-less elements (<img>) and disambiguates dupes.
-    sxId: z.string().optional(),
+    sxId: z.string().nullish(),
   })
   .refine((d) => d.sxId || d.anchor, "need sxId or anchor");
 
@@ -87,7 +85,7 @@ export async function POST(
   const homePath = homeRouteFile(repo.metadata as unknown as ProjectMetadata | null);
   const appIdx = homePath.indexOf("app/");
   const base = appIdx > 0 ? homePath.slice(0, appIdx) : "";
-  const sectionFiles = sections.map((s) => base + sectionInstancePath(s.key));
+  const sectionFiles = sections.map((s) => base + sectionInstancePath(s.name));
   const candidates = [homePath, ...sectionFiles];
   const tree = await getTree(connection, owner, repoName, branch).catch(() => []);
   for (const p of tree) {
@@ -102,26 +100,26 @@ export async function POST(
   // Preferred: locate by the stable source loc (data-sx-id).
   const loc = sxId ? parseSxId(sxId) : null;
   if (loc) {
-    // A click inside a section instance carries the instance's own component-file
-    // loc (site-editor-sections/<key>.tsx) — the key is the file name. Deleting
-    // it means stripping the <Section_key/> tag + import from the file that
-    // renders it, not editing the (self-contained) component file.
-    const key = /site-editor-sections\/([^/]+)\.tsx$/.exec(loc.filePath)?.[1];
-    if (op === "delete" && key) {
-      const importName = sectionImportName(key);
+    // A click inside a section carries the component-file loc
+    // (site-editor-sections/<Name>.tsx) — the file name IS the component name.
+    // Deleting means stripping a <Name/> tag (+ import if last) from the file that
+    // renders it, not editing the (shared) component file the click points into.
+    const name = /site-editor-sections\/([^/]+)\.tsx$/.exec(loc.filePath)?.[1];
+    if (op === "delete" && name) {
       for (const p of candidates.slice(0, 200)) {
         const current = await effective(p);
-        if (current == null || !current.includes(importName)) continue;
-        const result = removeComponentUsage(current, importName);
+        if (current == null || !current.includes(name)) continue;
+        const result = removeComponentUsage(current, name);
         if (result != null && result !== current) {
           hitPath = p;
           next = result;
-          // Staged instance: tell the client to drop it so sync won't re-add it.
-          if (sections.some((s) => s.key === key)) removedSectionKey = key;
+          // Staged placement: drop the first instance with this name so a later
+          // sync doesn't re-insert its tag.
+          removedSectionKey = sections.find((s) => s.name === name)?.key;
           break;
         }
       }
-    } else if (!key) {
+    } else if (!name) {
       const current = await effective(loc.filePath);
       if (current != null) {
         const result = applyNodeEdit(

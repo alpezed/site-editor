@@ -17,10 +17,11 @@ export interface FileEdits {
  *  override. Each instance also has its own component file (also a fileOverride),
  *  so two copies of the same catalog section are independent. */
 export interface SectionInstance {
-  /** Stable unique id for this placement (drives the component file name + import). */
+  /** Stable unique id for this placement (list identity + undo). */
   key: string;
-  /** Catalog section id this instance was created from. */
-  id: string;
+  /** Catalog component name — drives the (shared) component file name + import.
+   *  All placements of the same component share ONE file, keyed by this name. */
+  name: string;
   /** Stable builder id (`<file>@<path>`) of the container this was added inside;
    *  the component tag is inserted as that element's last child on sync/save.
    *  Absent → appended at the page root. Survives reload (see builder-path.ts). */
@@ -80,25 +81,22 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-/** Coerce stored sections (which may be legacy id-strings) to instances. */
+/** Coerce stored sections to instances. Handles legacy shapes: bare id-strings
+ *  (oldest sessions) and `{ key, id }` (pre-name refactor) both map onto `name`. */
 export function normalizeSections(
   raw: EditorState["sections"],
 ): SectionInstance[] {
   if (!raw) return [];
-  // Coerce bare id-strings (oldest sessions) to instances; keep the builder id.
-  return raw.map((s, i) =>
-    typeof s === "string"
-      ? { key: `${s}__${i}`, id: s }
-      : { key: s.key, id: s.id, builderId: s.builderId },
-  );
+  return raw.map((s, i) => {
+    if (typeof s === "string") return { key: `${s}__${i}`, name: s };
+    // `name` is the current field; `id` is the legacy one.
+    const name = s.name ?? (s as { id?: string }).id ?? "";
+    return { key: s.key, name, builderId: s.builderId };
+  });
 }
 
-/** Repo-relative component file for a section instance. */
-export function sectionInstancePath(key: string): string {
-  return `components/site-editor-sections/${key}.tsx`;
-}
-
-/** JS identifier used for the instance's import + JSX tag. */
-export function sectionImportName(key: string): string {
-  return `Section_${key.replace(/[^a-zA-Z0-9]/g, "_")}`;
+/** Repo-relative component file for a section — keyed by component NAME, so every
+ *  placement of the same catalog component resolves to (and rewrites) one file. */
+export function sectionInstancePath(name: string): string {
+  return `components/site-editor-sections/${name}.tsx`;
 }

@@ -12,7 +12,10 @@ const stateSchema = z.object({
         z.string(),
         z.object({
           key: z.string(),
-          id: z.string(),
+          // `name` is current; `id` accepted for legacy sessions (normalizeSections
+          // maps either onto name). At least one must be present.
+          name: z.string().optional(),
+          id: z.string().optional(),
           builderId: z.string().nullish(),
         }),
       ]),

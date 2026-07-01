@@ -41,7 +41,7 @@ export function LeftPanel(props: {
   sections: SectionInstance[];
   tree: TreeNode[];
   selectedSxId: string | null;
-  onAdd: (id: string) => void;
+  onAdd: (name: string) => void;
   onSelect: (sxId: string) => void;
   onReorderSections: (orderedKeys: string[]) => void;
 }) {
@@ -78,15 +78,15 @@ export function LeftPanel(props: {
 }
 
 const ICONS: Record<string, typeof Box> = {
-  "el-section": Box,
-  "el-container": Square,
-  "el-heading": Heading,
-  "el-text": Type,
-  "el-button": MousePointerClick,
-  "el-image": ImageIcon,
+  BlankSection: Box,
+  Container: Square,
+  Heading: Heading,
+  TextBlock: Type,
+  ButtonBlock: MousePointerClick,
+  ImageBlock: ImageIcon,
 };
 
-function AddTab({ onAdd }: { onAdd: (id: string) => void }) {
+function AddTab({ onAdd }: { onAdd: (name: string) => void }) {
   const [q, setQ] = useState("");
   const query = q.trim().toLowerCase();
   const cats = useMemo(
@@ -96,7 +96,9 @@ function AddTab({ onAdd }: { onAdd: (id: string) => void }) {
         items: SECTIONS.filter(
           (s) =>
             s.category === c &&
-            (!query || s.name.toLowerCase().includes(query)),
+            (!query ||
+              s.label.toLowerCase().includes(query) ||
+              s.name.toLowerCase().includes(query)),
         ),
       })).filter((c) => c.items.length > 0),
     [query],
@@ -114,15 +116,15 @@ function AddTab({ onAdd }: { onAdd: (id: string) => void }) {
         <Collapsible key={c.name} title={c.name} defaultOpen={c.name === "Basic Elements" || Boolean(query)}>
           <div className="grid grid-cols-1 gap-1">
             {c.items.map((s) => {
-              const Icon = ICONS[s.id] ?? Box;
+              const Icon = ICONS[s.name] ?? Box;
               return (
                 <button
-                  key={s.id}
-                  onClick={() => onAdd(s.id)}
+                  key={s.name}
+                  onClick={() => onAdd(s.name)}
                   className="group flex items-center gap-2 rounded-md border border-zinc-800 bg-zinc-900 px-2.5 py-2 text-left text-sm text-zinc-300 hover:border-zinc-600 hover:text-white"
                 >
                   <Icon className="size-4 text-zinc-500 group-hover:text-zinc-300" />
-                  <span className="flex-1 truncate">{s.name}</span>
+                  <span className="flex-1 truncate">{s.label}</span>
                   <Plus className="size-3.5 text-zinc-600 group-hover:text-zinc-300" />
                 </button>
               );
@@ -163,7 +165,7 @@ function LayersTab(props: {
           <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
             <SortableContext items={keys} strategy={verticalListSortingStrategy}>
               {props.sections.map((s) => (
-                <SortableSection key={s.key} id={s.key} name={getSection(s.id)?.name ?? s.id} />
+                <SortableSection key={s.key} id={s.key} name={getSection(s.name)?.label ?? s.name} />
               ))}
             </SortableContext>
           </DndContext>

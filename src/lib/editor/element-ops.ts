@@ -167,14 +167,30 @@ export function applyElementOp(
   return swapRanges(source, swapWith, node);
 }
 
-/** Remove the first JSX usage of a component (by tag name) plus its import line.
+/** Remove the FIRST JSX usage of a component (by tag name), plus its import line
+ *  only when it was the sole usage (shared components can have several placements
+ *  — keep the import so the others still resolve). null if not found.
+ *
  *  Deleting a whole section-instance can't be located in its own component file
- *  (that's where the click's data-sx-id points) — so we strip the `<Import />`
- *  tag and its `import` from the file that renders it. null if not found. */
+ *  (that's where the click's data-sx-id points), so we strip the `<Name/>` tag
+ *  from the file that renders it instead.
+ *
+ *  ponytail: with multiple placements of the same component the exact clicked tag
+ *  can't be pinned (all share one component file → one data-sx-id), so we remove
+ *  the first. Upgrade path: spread props on the component root so the page-level
+ *  `<Name/>` loc reaches the DOM and delete can locate the precise placement. */
 export function removeComponentUsage(source: string, tagName: string): string | null {
   const ast = parseSafe(source);
   if (!ast) return null;
   let hit: AnyNode | null = null;
+  let usages = 0;
+  walk(ast.program, (n) => {
+    if (n.type !== "JSXOpeningElement") return;
+    const name = (n as Record<string, unknown>).name as AnyNode | undefined;
+    if (name?.type === "JSXIdentifier" && (name as Record<string, unknown>).name === tagName) {
+      usages++;
+    }
+  });
   walk(ast.program, (n) => {
     if (hit || n.type !== "JSXElement") return;
     const open = (n as Record<string, unknown>).openingElement as AnyNode | undefined;
@@ -185,6 +201,7 @@ export function removeComponentUsage(source: string, tagName: string): string | 
   });
   if (!hit) return null;
   const out = spliceOut(source, hit);
+  if (usages > 1) return out; // other placements still need the import
   return out.replace(
     new RegExp(`^[ \\t]*import\\s+${tagName}\\s+from\\s+["'][^"']*["'];?[ \\t]*\\r?\\n?`, "m"),
     "",
@@ -267,18 +284,29 @@ export function __elementOpDemo(): void {
   console.assert(!delDyn.includes("Hello "), "dynamic delete removed wrong node");
   console.assert(delDyn.includes("Keep me"), "dynamic delete clobbered sibling");
 
-  // removeComponentUsage: strip a section-instance tag + its import.
+  // removeComponentUsage: strip a section tag + its import when it's the only one.
   const withSection = [
-    `import Section_k1 from "../components/site-editor-sections/k1";`,
+    `import TextBlock from "../components/site-editor-sections/TextBlock";`,
     `export default function Home() {`,
-    `  return (<main><h1>Keep</h1><div><Section_k1 /></div></main>);`,
+    `  return (<main><h1>Keep</h1><div><TextBlock /></div></main>);`,
     `}`,
   ].join("\n");
-  const removed = removeComponentUsage(withSection, "Section_k1")!;
+  const removed = removeComponentUsage(withSection, "TextBlock")!;
   console.assert(removed != null, "removeComponentUsage not located");
-  console.assert(!removed.includes("Section_k1"), "tag or import left behind");
+  console.assert(!removed.includes("TextBlock"), "tag or import left behind");
   console.assert(removed.includes("Keep"), "removeComponentUsage clobbered siblings");
   console.assert(removeComponentUsage(withSection, "Nope") === null, "missing tag should be null");
+
+  // Two placements: remove one tag, KEEP the import (the other still needs it).
+  const twice = [
+    `import TextBlock from "./TextBlock";`,
+    `export default function Home() {`,
+    `  return (<main><TextBlock /><TextBlock /></main>);`,
+    `}`,
+  ].join("\n");
+  const one = removeComponentUsage(twice, "TextBlock")!;
+  console.assert((one.match(/<TextBlock \/>/g) || []).length === 1, "should leave one placement");
+  console.assert(one.includes("import TextBlock from"), "import wrongly stripped while a usage remains");
 
   console.log("element-ops self-check OK\n--- move-up ---\n" + up);
 }

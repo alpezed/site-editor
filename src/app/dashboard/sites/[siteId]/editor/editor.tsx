@@ -440,7 +440,7 @@ export function Editor(props: Props) {
 	// in zustand and applied to the sandbox files on sync/save by that id — which
 	// survives reload, so the element stays exactly where it was dropped. No
 	// per-add server round-trip; the live preview shows it instantly via the agent.
-	function addSection(id: string) {
+	function addSection(name: string) {
 		const key = crypto.randomUUID();
 		const sel = useEditorStore.getState().selection;
 		// Drop into the container "Add inside" targeted, else the nearest container
@@ -453,7 +453,7 @@ export function Editor(props: Props) {
 
 		const next = [
 			...sectionsRef.current,
-			{ key, id, builderId: builderId ?? undefined },
+			{ key, name, builderId: builderId ?? undefined },
 		];
 		setSections(next);
 		sectionsRef.current = next;
@@ -464,7 +464,7 @@ export function Editor(props: Props) {
 			{
 				source: 'site-editor',
 				type: 'insertSection',
-				html: getSection(id)?.previewHtml ?? '',
+				html: getSection(name)?.previewHtml ?? '',
 				key,
 			},
 			'*'
@@ -508,7 +508,7 @@ export function Editor(props: Props) {
 		const arr = [...sectionsRef.current];
 		const i = arr.findIndex(s => s.key === key);
 		if (i < 0) return;
-		arr.splice(i + 1, 0, { key: newKey, id: arr[i].id });
+		arr.splice(i + 1, 0, { key: newKey, name: arr[i].name });
 		sectionsRef.current = arr;
 		setSections(arr);
 		setStatus('Section duplicated');

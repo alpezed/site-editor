@@ -8,7 +8,7 @@ import { cn } from "@/lib/utils";
 export function SectionGallery({
   onAdd,
 }: {
-  onAdd: (id: string) => void;
+  onAdd: (name: string) => void;
 }) {
   const [category, setCategory] = useState<string>(CATEGORIES[0]);
 
@@ -61,7 +61,7 @@ export function SectionGallery({
           {visible.map((s) => {
             return (
               <div
-                key={s.id}
+                key={s.name}
                 className="overflow-hidden rounded-xl border border-zinc-800 bg-zinc-900"
               >
                 <div
@@ -77,14 +77,14 @@ export function SectionGallery({
                 >
                   {!s.thumb && (
                     <span className="text-sm font-semibold text-zinc-300">
-                      {s.name}
+                      {s.label}
                     </span>
                   )}
                 </div>
                 <div className="flex items-center justify-between gap-2 px-4 py-3">
-                  <span className="truncate text-sm font-medium">{s.name}</span>
+                  <span className="truncate text-sm font-medium">{s.label}</span>
                   <button
-                    onClick={() => onAdd(s.id)}
+                    onClick={() => onAdd(s.name)}
                     className="inline-flex shrink-0 items-center gap-1.5 rounded-md bg-zinc-800 px-3 py-1.5 text-xs font-medium text-zinc-200 transition-colors hover:bg-zinc-700"
                   >
                     <Plus className="size-3.5" />

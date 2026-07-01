@@ -56,11 +56,23 @@ export const EDITOR_AGENT_JS = String.raw`
     }
     return null;
   }
+  // A builder id is "<file>@<path>"; reject ones from a layout file. layout.tsx
+  // wraps every route and holds this injected script — adding a section there
+  // pollutes every page and can kill edit mode.
+  function isLayoutBuilderId(id) {
+    var at = id ? id.lastIndexOf("@") : -1;
+    var file = at > 0 ? id.slice(0, at) : "";
+    return /(?:^|\/)layout\.(?:tsx|jsx|ts|js)$/.test(file);
+  }
   // Stable builder id of that container — the anchor persistence uses, so a
-  // reload renders the add in the SAME place the live preview showed it.
+  // reload renders the add in the SAME place the live preview showed it. When the
+  // nearest stamped id belongs to a layout (e.g. an unstamped page container
+  // resolves up to <body>), return null so the add falls back to the page root.
   function containerIdFor(el) {
     var c = containerNodeFor(el);
-    return c ? nearestAttr(c, "data-builder-id") : null;
+    if (!c) return null;
+    var id = nearestAttr(c, "data-builder-id");
+    return id && !isLayoutBuilderId(id) ? id : null;
   }
 
   window.addEventListener("message", function (e) {
