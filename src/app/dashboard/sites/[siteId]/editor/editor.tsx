@@ -111,6 +111,11 @@ export function Editor(props: Props) {
 	// Stable builder id of the container "Add inside" was clicked on, captured when
 	// the agent opens the gallery; the next gallery pick inserts inside that element.
 	const addInsideBuilderId = useRef<string | null>(null);
+	// Leaving the gallery without picking discards the anchor — otherwise a later
+	// unrelated add would drop into the stale container.
+	useEffect(() => {
+		if (mode !== 'explore') addInsideBuilderId.current = null;
+	}, [mode]);
 
 	const body = useCallback(
 		() => ({
@@ -329,7 +334,16 @@ export function Editor(props: Props) {
 				return;
 			}
 			if (d.type === 'section-op') {
-				applyElementOp(d.op, d.anchor, d.sxId ?? null);
+				// The op message can arrive without a locator (older agent, or a
+				// text-less element like <img> whose op payload is empty). Fall back
+				// to the selection captured on click, which carries the real sxId.
+				const sel = useEditorStore.getState().selection;
+				applyElementOp(
+					d.op,
+					d.anchor || sel?.anchor || '',
+					d.sxId ?? sel?.sxId ?? null,
+					d.elementId ?? d.name ?? sel?.name ?? null
+				);
 				return;
 			}
 			if (d.type !== 'edit') return;
@@ -519,12 +533,17 @@ export function Editor(props: Props) {
 	// mutated the live DOM for instant feedback; here we persist in the background
 	// — rewrite source, store the override locally (so autosave won't clobber it
 	// and Push ships it). No reload; Fast Refresh reconciles the canonical render.
-	async function applyElementOp(op: string, anchor: string, sxId: string | null) {
+	async function applyElementOp(
+		op: string,
+		anchor: string,
+		sxId: string | null,
+		name: string | null
+	) {
 		try {
 			const res = await fetch(`/api/sites/${props.siteId}/section-op`, {
 				method: 'POST',
 				headers: { 'content-type': 'application/json' },
-				body: JSON.stringify({ op, anchor, sxId }),
+				body: JSON.stringify({ op, anchor, sxId, name }),
 			});
 			const data = await res.json();
 			if (!res.ok) throw new Error(data.error ?? 'Op failed');

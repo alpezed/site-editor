@@ -379,6 +379,9 @@ export const EDITOR_AGENT_JS = String.raw`
         // text-less elements like img that text anchors can't pin). Falls back to
         // the text anchor server-side when absent (unstamped instant-preview node).
         sxId: el.getAttribute("data-sx-id") || null,
+        // Catalog component marker baked into the source (survives commit): the
+        // most robust delete locator for a text-less, prop-dropping component.
+        elementId: nearestAttr(el, "data-element-id"),
       },
       "*"
     );

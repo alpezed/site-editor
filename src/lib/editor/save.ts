@@ -2,7 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { commitFiles, getFileContent, getTree } from "@/lib/github/app";
 import { applyFieldEdits, applyTextEdits } from "@/lib/editor/ast";
 import { applySections } from "@/lib/editor/sections";
-import { stripSxIds } from "@/lib/editor/stamp";
+import { stampSource, stripSxIds } from "@/lib/editor/stamp";
 import type { ProjectMetadata } from "@/lib/import/component-scanner";
 import { recordDeployment } from "@/lib/deploy/service";
 import { logAudit } from "@/lib/audit";
@@ -137,7 +137,12 @@ export async function saveSite(opts: {
   if (session?.sandboxId) {
     try {
       const { getSandboxDriver } = await import("@/lib/sandbox");
-      await getSandboxDriver().writeFiles(session.sandboxId, changes);
+      // Stamped copies: bare source would strip the editor's data-sx-id /
+      // data-builder-id marks and break selection until the next sync.
+      await getSandboxDriver().writeFiles(
+        session.sandboxId,
+        changes.map((c) => ({ path: c.path, content: stampSource(c.path, c.content) })),
+      );
     } catch {
       // preview refresh is best-effort; publish already succeeded.
     }

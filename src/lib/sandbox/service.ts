@@ -109,7 +109,9 @@ async function stampProject(
     const files: { path: string; content: string }[] = [];
     for (const p of paths) {
       const raw = await driver.readFile(sandboxId, p);
-      if (raw == null || raw.includes("data-sx-id")) continue;
+      // Re-stamp files missing either mark (a sandbox stamped by an older build
+      // has data-sx-id but no data-builder-id — adds then fall to the page root).
+      if (raw == null || (raw.includes("data-sx-id") && raw.includes("data-builder-id"))) continue;
       const stamped = stampSource(p, raw);
       if (stamped !== raw) files.push({ path: p, content: stamped });
     }
@@ -130,6 +132,16 @@ export async function syncPreview(siteId: string, userId: string) {
 
   const session = await latestSession(siteId);
   if (!session?.sandboxId) throw new Error("No running preview");
+
+  // Refresh the injected click-to-edit agent on every sync. The sandbox baked it
+  // at creation, so agent updates otherwise only land on a full recreate; writing
+  // it here (then reloading the iframe) picks up the latest without one.
+  const { EDITOR_AGENT_JS } = await import("@/lib/sandbox/editor-agent");
+  await getSandboxDriver()
+    .writeFiles(session.sandboxId, [
+      { path: "public/__editor-agent.js", content: EDITOR_AGENT_JS },
+    ])
+    .catch(() => {});
 
   const state = (session.state as unknown as EditorState) ?? { pending: {} };
   const pending = state.pending ?? {};

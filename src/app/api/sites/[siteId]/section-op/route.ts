@@ -5,8 +5,9 @@ import { prisma } from "@/lib/prisma";
 import { getFileContent, getTree } from "@/lib/github/app";
 import { applyElementOp, removeComponentUsage } from "@/lib/editor/element-ops";
 import { applyNodeEdit } from "@/lib/editor/node-edit";
-import { parseSxId } from "@/lib/editor/stamp";
+import { parseSxId, stampSource, stripSxIds } from "@/lib/editor/stamp";
 import { homeRouteFile } from "@/lib/editor/sections";
+import { getSection } from "@/lib/sections/catalog";
 import { normalizeSections, sectionInstancePath } from "@/lib/editor/types";
 import { getSandboxDriver } from "@/lib/sandbox";
 import type { EditorState } from "@/lib/editor/types";
@@ -21,8 +22,11 @@ const schema = z
     // Stable source loc of the selected element (data-sx-id). Preferred over the
     // text anchor: it pins text-less elements (<img>) and disambiguates dupes.
     sxId: z.string().nullish(),
+    // Selected element's component/display name. Lets us delete a text-less
+    // section component (e.g. ImageBlock) that forwards neither a stamp nor text.
+    name: z.string().nullish(),
   })
-  .refine((d) => d.sxId || d.anchor, "need sxId or anchor");
+  .refine((d) => d.sxId || d.anchor || d.name, "need sxId, anchor or name");
 
 /**
  * Apply an in-preview element op (reorder/duplicate/delete) to source. Finds the
@@ -41,7 +45,7 @@ export async function POST(
   if (!parsed.success) {
     return NextResponse.json({ error: "invalid" }, { status: 400 });
   }
-  const { op, anchor, sxId } = parsed.data;
+  const { op, anchor, sxId, name } = parsed.data;
 
   const site = await prisma.site.findFirst({
     where: { id: siteId, ownerId: user.id },
@@ -75,7 +79,9 @@ export async function POST(
     if (overrides[p] != null) return overrides[p];
     if (sandboxId) {
       const live = await driver.readFile(sandboxId, p);
-      if (live != null) return live;
+      // Sandbox copies are stamped; sxId locs refer to the UNSTAMPED source, so
+      // strip before locating (strip is byte-exact — see stamp.ts).
+      if (live != null) return stripSxIds(live);
     }
     return await getFileContent(connection, owner, repoName, p, branch);
   };
@@ -104,22 +110,22 @@ export async function POST(
     // (site-editor-sections/<Name>.tsx) — the file name IS the component name.
     // Deleting means stripping a <Name/> tag (+ import if last) from the file that
     // renders it, not editing the (shared) component file the click points into.
-    const name = /site-editor-sections\/([^/]+)\.tsx$/.exec(loc.filePath)?.[1];
-    if (op === "delete" && name) {
+    const sxName = /site-editor-sections\/([^/]+)\.tsx$/.exec(loc.filePath)?.[1];
+    if (op === "delete" && sxName) {
       for (const p of candidates.slice(0, 200)) {
         const current = await effective(p);
-        if (current == null || !current.includes(name)) continue;
-        const result = removeComponentUsage(current, name);
+        if (current == null || !current.includes(sxName)) continue;
+        const result = removeComponentUsage(current, sxName);
         if (result != null && result !== current) {
           hitPath = p;
           next = result;
           // Staged placement: drop the first instance with this name so a later
           // sync doesn't re-insert its tag.
-          removedSectionKey = sections.find((s) => s.name === name)?.key;
+          removedSectionKey = sections.find((s) => s.name === sxName)?.key;
           break;
         }
       }
-    } else if (!name) {
+    } else if (!sxName) {
       const current = await effective(loc.filePath);
       if (current != null) {
         const result = applyNodeEdit(
@@ -131,6 +137,23 @@ export async function POST(
           hitPath = loc.filePath;
           next = result;
         }
+      }
+    }
+  }
+
+  // Name-based delete: a text-less section component (ImageBlock) forwards neither
+  // a stamp nor text, so sxId/anchor are empty — but the agent reports its
+  // component name. If it's a catalog component, strip its <Name/> tag by name.
+  if ((!hitPath || next == null) && op === "delete" && name && getSection(name)) {
+    for (const p of candidates.slice(0, 200)) {
+      const current = await effective(p);
+      if (current == null || !current.includes(name)) continue;
+      const result = removeComponentUsage(current, name);
+      if (result != null && result !== current) {
+        hitPath = p;
+        next = result;
+        removedSectionKey = sections.find((s) => s.name === name)?.key;
+        break;
       }
     }
   }
@@ -177,8 +200,10 @@ export async function POST(
   if (session?.sandboxId) {
     try {
       const { getSandboxDriver } = await import("@/lib/sandbox");
+      // Re-stamp: writing the bare source would strip every data-sx-id /
+      // data-builder-id from the live page and break all later selections/adds.
       await getSandboxDriver().writeFiles(session.sandboxId, [
-        { path: hitPath, content: next },
+        { path: hitPath, content: stampSource(hitPath, next) },
       ]);
     } catch {
       // best-effort live refresh; the override is persisted regardless.
